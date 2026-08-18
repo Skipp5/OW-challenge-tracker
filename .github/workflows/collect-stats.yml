@@ -2,9 +2,10 @@ name: Collect daily OW stats
 
 on:
   schedule:
-    # 08:00 UTC daily. Edit this if you want the snapshot taken at a
-    # different point in your day (cron is always UTC).
-    - cron: "0 8 * * *"
+    # 22:00 UTC daily = midnight CEST (Germany, daylight saving time,
+    # which is in effect through the whole challenge — ends Sep 13,
+    # well before the late-October DST switch back to CET).
+    - cron: "0 22 * * *"
   workflow_dispatch: {}
 
 permissions:
