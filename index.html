@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OW Rank Showdown</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="page">
+
+    <header class="hero">
+      <div class="hero-top">
+        <h1>OW Rank Showdown</h1>
+        <button id="refresh-btn" class="btn-ghost" type="button">
+          <span class="refresh-icon">&#8635;</span> Refresh
+        </button>
+      </div>
+      <p class="hero-sub">Daily-tracked competitive rank comparison, pulled from the OverFast API.</p>
+
+      <div class="challenge-bar">
+        <div class="challenge-dates">
+          <span id="date-start">Aug 16, 2026</span>
+          <span class="challenge-track">
+            <span id="challenge-progress-fill" class="challenge-track-fill"></span>
+          </span>
+          <span id="date-end">Sep 13, 2026</span>
+        </div>
+        <div class="challenge-meta">
+          <span id="challenge-status">Loading challenge status&hellip;</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="players" id="players-section" aria-label="Player profiles">
+      <!-- player cards injected by app.js -->
+    </section>
+
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab-btn is-active" role="tab" aria-selected="true" aria-controls="panel-overview" id="tab-overview" data-tab="overview" type="button">Overview</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-stats" id="tab-stats" data-tab="stats" type="button">Stats</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-heroes" id="tab-heroes" data-tab="heroes" type="button">Heroes</button>
+    </nav>
+
+    <section class="tab-panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+      <div class="chart-section">
+        <div class="chart-section-head">
+          <h2>Rank over time</h2>
+          <div class="legend" id="rank-legend"></div>
+        </div>
+        <p class="chart-caption">Highest competitive rank across all roles, tracked once per day.</p>
+
+        <div id="line-chart" class="chart-wrap"></div>
+      </div>
+
+      <div class="chart-section">
+        <div class="chart-section-head">
+          <h2>Games played per day</h2>
+          <div class="legend" id="games-legend"></div>
+        </div>
+        <p class="chart-caption">Daily change since tracking began — lighter segment is wins, darker is losses.</p>
+
+        <div id="games-chart" class="chart-wrap"></div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="panel-stats" role="tabpanel" aria-labelledby="tab-stats" hidden>
+      <div class="chart-section">
+        <div class="chart-section-head">
+          <h2>Competitive season stats</h2>
+        </div>
+        <p class="chart-caption">
+          Current competitive-season totals (season may have started before the challenge).
+          <span id="stats-note"></span>
+        </p>
+        <div class="table-wrap">
+          <table id="stats-table" class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Player</th>
+                <th scope="col">Games</th>
+                <th scope="col">Win %</th>
+                <th scope="col">Avg elims</th>
+                <th scope="col">Avg dmg</th>
+                <th scope="col">Avg deaths</th>
+                <th scope="col">Most elims</th>
+                <th scope="col">Most dmg</th>
+              </tr>
+            </thead>
+            <tbody id="stats-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="panel-heroes" role="tabpanel" aria-labelledby="tab-heroes" hidden>
+      <div class="chart-section">
+        <div class="chart-section-head">
+          <h2>Hero playtime per day</h2>
+          <div class="player-switch" id="hero-player-switch"></div>
+        </div>
+        <p class="chart-caption">Time played per hero since tracking began, by day.</p>
+        <div id="hero-subtabs" class="hero-subtabs"></div>
+        <div id="hero-playtime-chart" class="chart-wrap"></div>
+        <p id="hero-playtime-empty" class="empty-note" hidden></p>
+      </div>
+
+      <div class="chart-section">
+        <div class="chart-section-head">
+          <h2>Hero stats (season)</h2>
+        </div>
+        <p class="chart-caption">Competitive stats per hero this season, sorted by time played.</p>
+        <div class="table-wrap">
+          <table id="heroes-table" class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Hero</th>
+                <th scope="col">Role</th>
+                <th scope="col">Time played</th>
+                <th scope="col">Games</th>
+                <th scope="col">Win %</th>
+                <th scope="col">Avg elims</th>
+                <th scope="col">Avg dmg</th>
+                <th scope="col">Avg deaths</th>
+              </tr>
+            </thead>
+            <tbody id="heroes-table-body"></tbody>
+          </table>
+        </div>
+        <p id="heroes-empty" class="empty-note" hidden></p>
+      </div>
+    </section>
+
+    <footer class="page-footer">
+      <p>
+        Data via <a href="https://overfast-api.tekrop.fr" target="_blank" rel="noopener">OverFast API</a> (unofficial, community-run,
+        reflects Blizzard's public career profile data). Profiles must be set to public in-game for stats to appear here.
+        Rank and hero data is snapshotted once a day; day-by-day charts show the change since the previous snapshot.
+        Win/loss streaks and "most deaths in a game" aren't exposed by Blizzard's public stats, so they're omitted.
+      </p>
+      <p id="last-checked"></p>
+    </footer>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
