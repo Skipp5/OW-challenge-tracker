@@ -24,12 +24,13 @@ const DIVISIONS = [
 ];
 const TIERS_PER_DIVISION = 5;
 
-const CHALLENGE_START = new Date("2026-08-16T00:00:00Z");
+const CHALLENGE_START = new Date("2026-08-19T00:00:00Z");
 const CHALLENGE_END = new Date("2026-09-13T23:59:59Z");
 
 let heroesMetaCache = null;
 let latestHistory = [];
 let heroTabPlayerKey = PLAYERS[0].key;
+let statsHeroPlayerKey = PLAYERS[0].key;
 const heroPlaytimeSelected = {}; // playerKey -> heroKey
 
 /* ---------------------------------------------------------------------
@@ -71,6 +72,20 @@ function highestRank(competitive) {
       best = { roleLabel: role.label, roleIcon: entry.role_icon, entry, score };
     }
   }
+  return best;
+}
+
+// Scans every tracked snapshot for a player and returns the single
+// highest-scoring rank ever recorded (the "peak"), independent of what
+// their current rank is.
+function computePeakRank(history, playerKey) {
+  let best = null;
+  history.forEach((entry) => {
+    const pdata = entry.players?.[playerKey];
+    if (!pdata || !pdata.ok) return;
+    const current = highestRank(pdata.competitive);
+    if (current && (!best || current.score > best.score)) best = current;
+  });
   return best;
 }
 
@@ -256,7 +271,8 @@ function renderPlayerCards(players) {
     }
 
     const d = p;
-    const peak = highestRank(d.competitive);
+    const current = highestRank(d.competitive);
+    const best = computePeakRank(latestHistory, p.key);
 
     card.innerHTML = `
       <div class="player-card-head">
@@ -266,12 +282,13 @@ function renderPlayerCards(players) {
           <p class="player-tag">${p.battletag}${d.endorsement ? " · Endorsement " + d.endorsement : ""}</p>
         </div>
       </div>
-      ${peak ? `
+      ${current ? `
         <div class="player-peak">
-          <img class="player-peak-icon" src="${peak.entry.rank_icon || peak.entry.tier_icon}" alt="${rankText(peak.entry)}" />
+          <img class="player-peak-icon" src="${current.entry.rank_icon || current.entry.tier_icon}" alt="${rankText(current.entry)}" />
           <div>
-            <p class="player-peak-division">${rankText(peak.entry)}</p>
-            <p class="player-peak-role">${peak.roleIcon ? `<img src="${peak.roleIcon}" alt="" />` : ""}${peak.roleLabel}</p>
+            <p class="player-peak-division">${rankText(current.entry)}</p>
+            <p class="player-peak-role">${current.roleIcon ? `<img src="${current.roleIcon}" alt="" />` : ""}${current.roleLabel}</p>
+            ${best ? `<p class="player-peak-best">Peak: ${rankText(best.entry)}</p>` : ""}
           </div>
         </div>
       ` : `<p class="player-card-empty">Unranked this season</p>`}
@@ -696,33 +713,45 @@ function renderStatsTableBody() {
 }
 
 /* ---------------------------------------------------------------------
- * Heroes tab: season stats table
+ * Stats tab: hero stats since challenge start
  * ------------------------------------------------------------------- */
 
-function heroRows(careerStats, heroesMeta) {
+// Time played / games / win% are counted only since the challenge began
+// (day-by-day deltas off the tracked snapshots) — season-long history from
+// before the challenge doesn't count. Avg elims/dmg/deaths can't be isolated
+// to "just this challenge" without match-by-match data, so those stay as
+// the season-wide per-game averages the API actually gives us.
+function heroRows(careerStats, heroesMeta, playerKey) {
   if (!careerStats) return [];
   return Object.entries(careerStats)
     .filter(([key]) => key !== "all-heroes")
     .map(([key, cat]) => {
-      const timePlayed = cat.game?.time_played ?? 0;
-      const games = cat.game?.games_played ?? 0;
-      if (timePlayed <= 0) return null;
-      const won = cat.game?.games_won ?? 0;
+      const seasonTimePlayed = cat.game?.time_played ?? 0;
+      if (seasonTimePlayed <= 0) return null;
+      const seasonGames = cat.game?.games_played ?? 0;
       const elims = cat.combat?.eliminations ?? null;
       const dmg = cat.combat?.hero_damage_done ?? cat.combat?.all_damage_done ?? null;
       const deaths = cat.combat?.deaths ?? null;
+
+      const timeDelta = dailySeries(latestHistory, playerKey, (pd) => pd.career_stats?.[key]?.game?.time_played ?? 0)
+        .reduce((s, pt) => s + pt.delta, 0);
+      const gamesDelta = dailySeries(latestHistory, playerKey, (pd) => pd.career_stats?.[key]?.game?.games_played ?? 0)
+        .reduce((s, pt) => s + pt.delta, 0);
+      const winsDelta = dailySeries(latestHistory, playerKey, (pd) => pd.career_stats?.[key]?.game?.games_won ?? 0)
+        .reduce((s, pt) => s + pt.delta, 0);
+
       const meta = heroesMeta[key];
       return {
         key,
         name: meta?.name || key,
         portrait: meta?.portrait || "",
         role: meta?.role ? meta.role.charAt(0).toUpperCase() + meta.role.slice(1) : "—",
-        timePlayed,
-        games,
-        winPct: games > 0 ? (won / games) * 100 : null,
-        avgElims: games > 0 && elims !== null ? elims / games : null,
-        avgDmg: games > 0 && dmg !== null ? dmg / games : null,
-        avgDeaths: games > 0 && deaths !== null ? deaths / games : null,
+        timePlayed: timeDelta,
+        games: gamesDelta,
+        winPct: gamesDelta > 0 ? (winsDelta / gamesDelta) * 100 : null,
+        avgElims: seasonGames > 0 && elims !== null ? elims / seasonGames : null,
+        avgDmg: seasonGames > 0 && dmg !== null ? dmg / seasonGames : null,
+        avgDeaths: seasonGames > 0 && deaths !== null ? deaths / seasonGames : null,
       };
     })
     .filter(Boolean)
@@ -734,7 +763,7 @@ let lastHeroRows = [];
 let lastHeroMaxTime = 0;
 let lastHeroActivePlayer = null;
 
-function renderHeroesSeasonTable(active, heroesMeta) {
+function renderChallengeHeroTable(active, heroesMeta) {
   lastHeroActivePlayer = active;
   const emptyNote = document.getElementById("heroes-empty");
 
@@ -745,7 +774,7 @@ function renderHeroesSeasonTable(active, heroesMeta) {
     emptyNote.textContent = "Profile unavailable for this player.";
     return;
   }
-  lastHeroRows = heroRows(active.career_stats, heroesMeta);
+  lastHeroRows = heroRows(active.career_stats, heroesMeta, active.key);
   if (lastHeroRows.length === 0) {
     document.getElementById("heroes-table-body").innerHTML = "";
     emptyNote.hidden = false;
@@ -937,7 +966,28 @@ async function renderHeroesTab(players) {
   const heroesMeta = await loadHeroesMeta();
   const active = players.find((p) => p.key === heroTabPlayerKey);
   renderHeroPlaytimeSection(active, heroesMeta);
-  renderHeroesSeasonTable(active, heroesMeta);
+}
+
+function renderStatsHeroPlayerSwitch(players) {
+  const el = document.getElementById("stats-hero-player-switch");
+  el.innerHTML = players.map((p) => `
+    <button type="button" data-key="${p.key}" class="${p.key === statsHeroPlayerKey ? "is-active" : ""}" style="${p.key === statsHeroPlayerKey ? `color:var(${p.varName})` : ""}">
+      <span class="legend-swatch" style="background:var(${p.varName})"></span>${p.battletag.split("#")[0]}
+    </button>
+  `).join("");
+  el.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      statsHeroPlayerKey = btn.getAttribute("data-key");
+      renderStatsHeroSection(currentPlayers);
+    });
+  });
+}
+
+async function renderStatsHeroSection(players) {
+  renderStatsHeroPlayerSwitch(players);
+  const heroesMeta = await loadHeroesMeta();
+  const active = players.find((p) => p.key === statsHeroPlayerKey);
+  renderChallengeHeroTable(active, heroesMeta);
 }
 
 /* ---------------------------------------------------------------------
@@ -997,11 +1047,12 @@ async function refresh() {
     renderGamesChart(mergedHistory, players);
     renderStatsTab(players);
     await renderHeroesTab(players);
+    await renderStatsHeroSection(players);
 
-    document.getElementById("last-checked").textContent = `Last checked: ${fmtDateTime(new Date())}`;
-    document.getElementById("stats-note").textContent = history.length > 0
-      ? `Tracking since ${fmtDate(new Date(history[0].date + "T12:00:00Z"))}.`
+    const trackingSince = history.length > 0
+      ? ` · Tracking since ${fmtDate(new Date(history[0].date + "T12:00:00Z"))}`
       : "";
+    document.getElementById("last-checked").textContent = `Last checked: ${fmtDateTime(new Date())}${trackingSince}`;
   } catch (err) {
     document.getElementById("last-checked").textContent = `Refresh failed: ${err.message}`;
   } finally {
