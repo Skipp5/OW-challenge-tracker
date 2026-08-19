@@ -542,8 +542,8 @@ function renderGamesChart(history, players) {
   const container = document.getElementById("games-chart");
   const { dates, perPlayer } = buildDailyGamesData(history, players);
 
-  if (dates.length === 0) {
-    container.innerHTML = `<p class="empty-note">Not enough tracked days yet — check back tomorrow.</p>`;
+  if (dates.length < 2) {
+    container.innerHTML = `<p class="empty-note">Only one day tracked so far — day-by-day changes need at least two tracked days to compare. Check back tomorrow.</p>`;
     return;
   }
 
@@ -834,7 +834,12 @@ function renderChallengeHeroTable(active, heroesMeta) {
     emptyNote.textContent = "No competitive hero data this season yet.";
     return;
   }
-  emptyNote.hidden = true;
+  if (latestHistory.length < 2) {
+    emptyNote.hidden = false;
+    emptyNote.textContent = "Only one day tracked so far, so time/games/win % below read zero — they need at least two tracked days to show a change. Check back tomorrow.";
+  } else {
+    emptyNote.hidden = true;
+  }
   lastHeroMaxTime = Math.max(1, ...lastHeroRows.map((r) => r.timePlayed));
   renderHeroesTableBody();
 }
