@@ -19,8 +19,8 @@ const ROLES = [
 ];
 
 const DIVISIONS = [
-  "bronze", "silver", "gold", "platinum",
-  "diamond", "master", "grandmaster", "champion",
+  "bronze", "silver", "gold", "platinum", "emerald",
+  "diamond", "master", "grandmaster", "ultimate",
 ];
 const TIERS_PER_DIVISION = 5;
 
@@ -323,8 +323,8 @@ function placeTooltip(tooltip, xUnits, yUnits, scaleX, scaleY, html) {
  * Overview tab: rank-over-time line chart
  * ------------------------------------------------------------------- */
 
-const RC_W = 1100, RC_H = 380;
-const RC_MARGIN = { top: 16, right: 70, bottom: 34, left: 100 };
+const RC_W = 1100, RC_H = 400;
+const RC_MARGIN = { top: 16, right: 70, bottom: 36, left: 150 };
 const RC_PLOT_W = RC_W - RC_MARGIN.left - RC_MARGIN.right;
 const RC_PLOT_H = RC_H - RC_MARGIN.top - RC_MARGIN.bottom;
 
@@ -384,22 +384,22 @@ function renderLineChart(history, players) {
       const scoreAtTierTop = div * TIERS_PER_DIVISION + (TIERS_PER_DIVISION - tier + 1);
       const y = rcY(scoreAtTierTop);
       yAxis += `<line class="cw-gridline-minor" x1="${RC_MARGIN.left}" x2="${RC_MARGIN.left + RC_PLOT_W}" y1="${y}" y2="${y}" />`;
-      yAxis += `<text class="cw-axis-label-minor" x="${RC_MARGIN.left - 34}" y="${y}" text-anchor="end" dominant-baseline="middle">${tier}</text>`;
+      yAxis += `<text class="cw-axis-label-minor" x="${RC_MARGIN.left - 16}" y="${y}" text-anchor="end" dominant-baseline="middle">${tier}</text>`;
     }
     yAxis += `<line class="cw-gridline" x1="${RC_MARGIN.left}" x2="${RC_MARGIN.left + RC_PLOT_W}" y1="${rcY(bandTop)}" y2="${rcY(bandTop)}" />`;
     const bandMidY = (rcY(bandTop) + rcY(bandBottom)) / 2;
-    yAxis += `<text class="cw-axis-label" x="${RC_MARGIN.left - 10}" y="${bandMidY}" text-anchor="end" dominant-baseline="middle">${divisionLabel(DIVISIONS[div])}</text>`;
+    yAxis += `<text class="cw-axis-label" x="${RC_MARGIN.left - 48}" y="${bandMidY}" text-anchor="end" dominant-baseline="middle">${divisionLabel(DIVISIONS[div])}</text>`;
   }
   yAxis += `<line class="cw-gridline" x1="${RC_MARGIN.left}" x2="${RC_MARGIN.left + RC_PLOT_W}" y1="${rcY(yMin)}" y2="${rcY(yMin)}" />`;
 
-  // X axis: every day, month shown on the 1st and on the first tick.
+  // X axis: every day, anchored to the same noon-UTC instant used for data
+  // points so ticks line up exactly with the dots/lines above them.
   let dateLabels = "";
-  const dayMs = 86400000;
   let firstTick = true;
-  for (let t = CHALLENGE_START.getTime(); t <= CHALLENGE_END.getTime(); t += dayMs) {
-    const d = new Date(t);
-    const x = rcX(d);
-    const label = (firstTick || d.getUTCDate() === 1) ? fmtDateShort(d) : String(d.getUTCDate());
+  for (let d = new Date(CHALLENGE_START); d <= CHALLENGE_END; d.setUTCDate(d.getUTCDate() + 1)) {
+    const noon = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12));
+    const x = rcX(noon);
+    const label = (firstTick || noon.getUTCDate() === 1) ? fmtDateShort(noon) : String(noon.getUTCDate());
     dateLabels += `<text class="cw-date-label" x="${x}" y="${RC_H - 10}" text-anchor="middle">${label}</text>`;
     firstTick = false;
   }
@@ -575,6 +575,55 @@ function renderGamesChart(history, players) {
 }
 
 /* ---------------------------------------------------------------------
+ * Sortable data tables (shared by Stats + Heroes tables)
+ * ------------------------------------------------------------------- */
+
+function sortRows(rows, sortState) {
+  if (!sortState.key) return rows;
+  const indexed = rows.map((r, i) => ({ r, i }));
+  indexed.sort((a, b) => {
+    const va = a.r[sortState.key], vb = b.r[sortState.key];
+    const aNull = va === null || va === undefined;
+    const bNull = vb === null || vb === undefined;
+    if (aNull && bNull) return a.i - b.i;
+    if (aNull) return 1;
+    if (bNull) return -1;
+    let cmp = typeof va === "string" ? va.localeCompare(vb) : va - vb;
+    if (cmp === 0) cmp = a.i - b.i;
+    return sortState.dir === "asc" ? cmp : -cmp;
+  });
+  return indexed.map((x) => x.r);
+}
+
+function updateSortIndicators(theadSelector, sortState) {
+  document.querySelectorAll(`${theadSelector} th[data-sort-key]`).forEach((th) => {
+    th.classList.remove("sort-asc", "sort-desc");
+    if (th.getAttribute("data-sort-key") === sortState.key) {
+      th.classList.add(sortState.dir === "asc" ? "sort-asc" : "sort-desc");
+    }
+  });
+}
+
+function wireSortableHeaders(theadSelector, sortState, onChange) {
+  document.querySelectorAll(`${theadSelector} th[data-sort-key]`).forEach((th) => {
+    th.classList.add("is-sortable");
+    th.addEventListener("click", () => {
+      const key = th.getAttribute("data-sort-key");
+      const type = th.getAttribute("data-sort-type") || "number";
+      if (sortState.key === key) {
+        sortState.dir = sortState.dir === "asc" ? "desc" : "asc";
+      } else {
+        sortState.key = key;
+        sortState.dir = type === "text" ? "asc" : "desc";
+      }
+      updateSortIndicators(theadSelector, sortState);
+      onChange();
+    });
+  });
+  updateSortIndicators(theadSelector, sortState);
+}
+
+/* ---------------------------------------------------------------------
  * Stats tab
  * ------------------------------------------------------------------- */
 
@@ -598,26 +647,49 @@ function computeStatsRow(careerStats) {
   };
 }
 
+const statsSortState = { key: null, dir: "desc" };
+let lastStatsRows = [];
+
 function renderStatsTab(players) {
+  lastStatsRows = players.map((p) => {
+    const row = p.ok ? computeStatsRow(p.career_stats) : null;
+    return {
+      playerRef: p,
+      player: p.battletag.split("#")[0],
+      games: row?.games ?? null,
+      winPct: row?.winPct ?? null,
+      avgElims: row?.avgElims ?? null,
+      avgDmg: row?.avgDmg ?? null,
+      avgDeaths: row?.avgDeaths ?? null,
+      mostElims: row?.mostElims ?? null,
+      mostDmg: row?.mostDmg ?? null,
+      unavailable: !p.ok,
+      empty: p.ok && (!row || row.games === 0),
+    };
+  });
+  renderStatsTableBody();
+}
+
+function renderStatsTableBody() {
   const body = document.getElementById("stats-table-body");
-  body.innerHTML = players.map((p) => {
-    if (!p.ok) {
-      return `<tr><td class="cell-player"><span class="player-swatch" style="background:var(${p.varName})"></span>${p.battletag.split("#")[0]}</td><td colspan="7" class="cell-muted">profile unavailable</td></tr>`;
+  const sorted = sortRows(lastStatsRows, statsSortState);
+  body.innerHTML = sorted.map((r) => {
+    if (r.unavailable) {
+      return `<tr><td class="cell-player"><span class="player-swatch" style="background:var(${r.playerRef.varName})"></span>${r.player}</td><td colspan="7" class="cell-muted">profile unavailable</td></tr>`;
     }
-    const row = computeStatsRow(p.career_stats);
-    if (!row || row.games === 0) {
-      return `<tr><td class="cell-player"><span class="player-swatch" style="background:var(${p.varName})"></span>${p.battletag.split("#")[0]}</td><td colspan="7" class="cell-muted">no competitive games played this season</td></tr>`;
+    if (r.empty) {
+      return `<tr><td class="cell-player"><span class="player-swatch" style="background:var(${r.playerRef.varName})"></span>${r.player}</td><td colspan="7" class="cell-muted">no competitive games played this season</td></tr>`;
     }
     return `
       <tr>
-        <td class="cell-player"><span class="player-swatch" style="background:var(${p.varName})"></span>${p.battletag.split("#")[0]}</td>
-        <td>${fmtInt(row.games)}</td>
-        <td>${fmtPct(row.winPct)}</td>
-        <td>${fmtAvg(row.avgElims)}</td>
-        <td>${fmtInt(row.avgDmg)}</td>
-        <td>${fmtAvg(row.avgDeaths)}</td>
-        <td>${fmtInt(row.mostElims)}</td>
-        <td>${fmtInt(row.mostDmg)}</td>
+        <td class="cell-player"><span class="player-swatch" style="background:var(${r.playerRef.varName})"></span>${r.player}</td>
+        <td>${fmtInt(r.games)}</td>
+        <td>${fmtPct(r.winPct)}</td>
+        <td>${fmtAvg(r.avgElims)}</td>
+        <td>${fmtInt(r.avgDmg)}</td>
+        <td>${fmtAvg(r.avgDeaths)}</td>
+        <td>${fmtInt(r.mostElims)}</td>
+        <td>${fmtInt(r.mostDmg)}</td>
       </tr>
     `;
   }).join("");
@@ -657,36 +729,58 @@ function heroRows(careerStats, heroesMeta) {
     .sort((a, b) => b.timePlayed - a.timePlayed);
 }
 
+const heroesSortState = { key: "timePlayed", dir: "desc" };
+let lastHeroRows = [];
+let lastHeroMaxTime = 0;
+let lastHeroActivePlayer = null;
+
 function renderHeroesSeasonTable(active, heroesMeta) {
-  const body = document.getElementById("heroes-table-body");
+  lastHeroActivePlayer = active;
   const emptyNote = document.getElementById("heroes-empty");
 
   if (!active || !active.ok) {
-    body.innerHTML = "";
+    lastHeroRows = [];
+    document.getElementById("heroes-table-body").innerHTML = "";
     emptyNote.hidden = false;
     emptyNote.textContent = "Profile unavailable for this player.";
     return;
   }
-  const rows = heroRows(active.career_stats, heroesMeta);
-  if (rows.length === 0) {
-    body.innerHTML = "";
+  lastHeroRows = heroRows(active.career_stats, heroesMeta);
+  if (lastHeroRows.length === 0) {
+    document.getElementById("heroes-table-body").innerHTML = "";
     emptyNote.hidden = false;
     emptyNote.textContent = "No competitive hero data this season yet.";
     return;
   }
   emptyNote.hidden = true;
-  body.innerHTML = rows.map((r) => `
+  lastHeroMaxTime = Math.max(...lastHeroRows.map((r) => r.timePlayed));
+  renderHeroesTableBody();
+}
+
+function renderHeroesTableBody() {
+  const body = document.getElementById("heroes-table-body");
+  const sorted = sortRows(lastHeroRows, heroesSortState);
+  body.innerHTML = sorted.map((r) => {
+    const pct = lastHeroMaxTime > 0 ? clamp((r.timePlayed / lastHeroMaxTime) * 100, 0, 100) : 0;
+    return `
     <tr>
       <td class="cell-hero">${r.portrait ? `<img src="${r.portrait}" alt="" />` : ""}${r.name}</td>
       <td>${r.role}</td>
-      <td>${fmtDuration(r.timePlayed)}</td>
+      <td>
+        <div class="time-bar-track">
+          <div class="time-bar-fill" style="width:${pct}%;background:var(${lastHeroActivePlayer.varName})">
+            <span class="time-bar-label">${fmtDuration(r.timePlayed)}</span>
+          </div>
+        </div>
+      </td>
       <td>${fmtInt(r.games)}</td>
       <td>${fmtPct(r.winPct)}</td>
       <td>${fmtAvg(r.avgElims)}</td>
       <td>${fmtInt(r.avgDmg)}</td>
       <td>${fmtAvg(r.avgDeaths)}</td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 }
 
 /* ---------------------------------------------------------------------
@@ -919,6 +1013,8 @@ async function refresh() {
 document.getElementById("refresh-btn").addEventListener("click", refresh);
 
 wireTabs();
+wireSortableHeaders("#stats-table thead", statsSortState, renderStatsTableBody);
+wireSortableHeaders("#heroes-table thead", heroesSortState, renderHeroesTableBody);
 renderChallengeProgress();
 setInterval(renderChallengeProgress, 60_000);
 refresh();

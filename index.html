@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>OW Rank Showdown</title>
+<title>Overwatch Rank Challenge</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -11,7 +11,7 @@
 
     <header class="hero">
       <div class="hero-top">
-        <h1>OW Rank Showdown</h1>
+        <h1>Overwatch Rank Challenge</h1>
         <button id="refresh-btn" class="btn-ghost" type="button">
           <span class="refresh-icon">&#8635;</span> Refresh
         </button>
@@ -77,14 +77,14 @@
           <table id="stats-table" class="data-table">
             <thead>
               <tr>
-                <th scope="col">Player</th>
-                <th scope="col">Games</th>
-                <th scope="col">Win %</th>
-                <th scope="col">Avg elims</th>
-                <th scope="col">Avg dmg</th>
-                <th scope="col">Avg deaths</th>
-                <th scope="col">Most elims</th>
-                <th scope="col">Most dmg</th>
+                <th scope="col" data-sort-key="player" data-sort-type="text">Player</th>
+                <th scope="col" data-sort-key="games">Games</th>
+                <th scope="col" data-sort-key="winPct">Win %</th>
+                <th scope="col" data-sort-key="avgElims">Avg elims</th>
+                <th scope="col" data-sort-key="avgDmg">Avg dmg</th>
+                <th scope="col" data-sort-key="avgDeaths">Avg deaths</th>
+                <th scope="col" data-sort-key="mostElims">Most elims</th>
+                <th scope="col" data-sort-key="mostDmg">Most dmg</th>
               </tr>
             </thead>
             <tbody id="stats-table-body"></tbody>
@@ -114,14 +114,14 @@
           <table id="heroes-table" class="data-table">
             <thead>
               <tr>
-                <th scope="col">Hero</th>
-                <th scope="col">Role</th>
-                <th scope="col">Time played</th>
-                <th scope="col">Games</th>
-                <th scope="col">Win %</th>
-                <th scope="col">Avg elims</th>
-                <th scope="col">Avg dmg</th>
-                <th scope="col">Avg deaths</th>
+                <th scope="col" data-sort-key="name" data-sort-type="text">Hero</th>
+                <th scope="col" data-sort-key="role" data-sort-type="text">Role</th>
+                <th scope="col" data-sort-key="timePlayed">Time played</th>
+                <th scope="col" data-sort-key="games">Games</th>
+                <th scope="col" data-sort-key="winPct">Win %</th>
+                <th scope="col" data-sort-key="avgElims">Avg elims</th>
+                <th scope="col" data-sort-key="avgDmg">Avg dmg</th>
+                <th scope="col" data-sort-key="avgDeaths">Avg deaths</th>
               </tr>
             </thead>
             <tbody id="heroes-table-body"></tbody>
