@@ -54,9 +54,10 @@ async function main() {
 
   let history = [];
   try {
-    history = JSON.parse(await readFile(HISTORY_PATH, "utf8"));
-  } catch {
-    // No history file yet — first run.
+    const raw = (await readFile(HISTORY_PATH, "utf8")).replace(/^﻿/, ""); // strip BOM if present
+    history = JSON.parse(raw);
+  } catch (err) {
+    console.error(`Could not read/parse existing history.json, starting fresh: ${err.message}`);
   }
 
   const today = new Date().toISOString().slice(0, 10); // UTC calendar date
