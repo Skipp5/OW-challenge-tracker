@@ -28,7 +28,9 @@ const CHALLENGE_START = new Date("2026-08-19T00:00:00Z");
 const CHALLENGE_END = new Date("2026-09-13T23:59:59Z");
 
 let heroesMetaCache = null;
-let latestHistory = [];
+let latestHistory = []; // committed history + live "today" merged in — for peak/rank display
+let latestRawHistory = []; // committed history only, untouched — the anchor for delta math
+let latestLiveEntry = null; // today's live snapshot, kept separate from latestRawHistory
 let heroTabPlayerKey = PLAYERS[0].key;
 let statsHeroPlayerKey = PLAYERS[0].key;
 let heroStatsLookback = "challenge";
@@ -119,7 +121,12 @@ function fmtDuration(seconds) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
-function isoDate(d) { return d.toISOString().slice(0, 10); }
+
+// The challenge and the daily collector both run on CEST's midnight, not
+// UTC's — shift before slicing so "today" flips over at the same instant
+// the collector's snapshot does, not two hours later.
+const CEST_OFFSET_MS = 2 * 60 * 60 * 1000;
+function isoDate(d) { return new Date(d.getTime() + CEST_OFFSET_MS).toISOString().slice(0, 10); }
 
 // "Nice" round number at or above v, for axis tops.
 function niceMax(v) {
@@ -192,49 +199,80 @@ async function loadHistory() {
   }
 }
 
-// Per-player day-by-day delta of a cumulative career stat. The first
-// tracked day always has delta 0 (we don't front-load the season's
-// pre-tracking total onto day one) — every following point is the
-// change since the previous *tracked* day (gaps from a private/failed
-// fetch don't reset the baseline).
-function dailySeries(history, playerKey, getValue) {
-  const points = [];
-  let prev = null;
-  history.forEach((entry) => {
-    const pdata = entry.players?.[playerKey];
-    if (!pdata || !pdata.ok) return;
-    const value = getValue(pdata);
-    if (value === null || value === undefined) return;
-    const delta = prev === null ? 0 : Math.max(0, value - prev);
-    points.push({ date: new Date(entry.date + "T12:00:00Z"), delta, value });
-    prev = value;
-  });
-  return points;
-}
-
-// Same idea as dailySeries, but as a single before/after delta rather than
-// a per-day series: value at the latest tracked snapshot minus the value at
-// the latest snapshot on or before sinceDate (clamped to the earliest data
-// available if sinceDate is before tracking began).
-function playerValueSeries(history, playerKey, getValue) {
+// Reduces raw history + a live snapshot down to one {date, value} per
+// player for a given cumulative career stat, in chronological order.
+// Every *committed* day (from data/history.json) is kept exactly as
+// recorded — nothing here ever discards or overwrites an already-closed
+// snapshot. If today hasn't been committed yet (or the collector's most
+// recent commit IS today, but the day isn't over), the live reading
+// becomes that day's current value; the previous commit — Day 0's own
+// first-ever snapshot included — always stays intact as the anchor
+// underneath it.
+function committedPoints(history, playerKey, getValue) {
   const points = [];
   history.forEach((entry) => {
     const pdata = entry.players?.[playerKey];
     if (!pdata || !pdata.ok) return;
     const value = getValue(pdata);
     if (value === null || value === undefined) return;
-    points.push({ date: new Date(entry.date + "T12:00:00Z"), value });
+    points.push({ date: entry.date, value });
   });
+  return points; // history is pre-sorted ascending
+}
+
+// Per-player day-by-day delta of a cumulative career stat. Each *closed*
+// day's delta is fixed — the value at the START of the NEXT tracked day
+// minus the value at the start of this one (so it reflects everything
+// that happened during that calendar day, however many refreshes or
+// re-collections touched it). The most recent tracked day has no "next"
+// snapshot yet, so it's still open: its delta is live-current minus its
+// own committed value, and grows on every refresh until a newer day's
+// snapshot closes it.
+function dailySeries(history, playerKey, getValue, liveEntry) {
+  const committed = committedPoints(history, playerKey, getValue);
+  const points = [];
+
+  for (let i = 0; i < committed.length - 1; i++) {
+    const delta = Math.max(0, committed[i + 1].value - committed[i].value);
+    points.push({ date: new Date(committed[i].date + "T12:00:00Z"), delta, value: committed[i].value });
+  }
+
+  if (committed.length > 0) {
+    const last = committed[committed.length - 1];
+    const liveValue = liveValueFor(liveEntry, playerKey, getValue);
+    const current = liveValue !== null ? liveValue : last.value;
+    points.push({ date: new Date(last.date + "T12:00:00Z"), delta: Math.max(0, current - last.value), value: current });
+  } else {
+    const liveValue = liveValueFor(liveEntry, playerKey, getValue);
+    if (liveValue !== null) {
+      points.push({ date: new Date(liveEntry.date + "T12:00:00Z"), delta: 0, value: liveValue });
+    }
+  }
+
   return points;
 }
 
-function deltaSince(history, playerKey, sinceDate, getValue) {
-  const points = playerValueSeries(history, playerKey, getValue);
-  if (points.length === 0) return null;
-  const latest = points[points.length - 1].value;
-  let baseline = points[0].value;
-  for (const pt of points) {
-    if (pt.date <= sinceDate) baseline = pt.value; else break;
+function liveValueFor(liveEntry, playerKey, getValue) {
+  if (!liveEntry) return null;
+  const pdata = liveEntry.players?.[playerKey];
+  if (!pdata || !pdata.ok) return null;
+  const value = getValue(pdata);
+  return value === null || value === undefined ? null : value;
+}
+
+// Value at the latest tracked snapshot (live, if today isn't closed yet)
+// minus the value at the latest COMMITTED snapshot on or before sinceDate
+// (clamped to the earliest data available if sinceDate predates tracking).
+function deltaSince(history, playerKey, sinceDate, getValue, liveEntry) {
+  const committed = committedPoints(history, playerKey, getValue);
+  const liveValue = liveValueFor(liveEntry, playerKey, getValue);
+  const latest = liveValue !== null ? liveValue : (committed.length > 0 ? committed[committed.length - 1].value : null);
+  if (latest === null) return null;
+  if (committed.length === 0) return 0;
+
+  let baseline = committed[0].value;
+  for (const pt of committed) {
+    if (new Date(pt.date + "T12:00:00Z") <= sinceDate) baseline = pt.value; else break;
   }
   return Math.max(0, latest - baseline);
 }
@@ -518,11 +556,11 @@ const GC_MARGIN = { top: 14, right: 20, bottom: 38, left: 50 };
 const GC_PLOT_W = GC_W - GC_MARGIN.left - GC_MARGIN.right;
 const GC_PLOT_H = GC_H - GC_MARGIN.top - GC_MARGIN.bottom;
 
-function buildDailyGamesData(history, players) {
+function buildDailyGamesData(history, players, liveEntry) {
   const perPlayer = {};
   players.forEach((p) => {
-    const gamesPts = dailySeries(history, p.key, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_played ?? null);
-    const winsPts = dailySeries(history, p.key, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_won ?? null);
+    const gamesPts = dailySeries(history, p.key, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_played ?? null, liveEntry);
+    const winsPts = dailySeries(history, p.key, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_won ?? null, liveEntry);
     const winsByDate = new Map(winsPts.map((pt) => [isoDate(pt.date), pt.delta]));
     perPlayer[p.key] = gamesPts.map((pt) => {
       const iso = isoDate(pt.date);
@@ -538,12 +576,12 @@ function buildDailyGamesData(history, players) {
   return { dates, perPlayer };
 }
 
-function renderGamesChart(history, players) {
+function renderGamesChart(history, players, liveEntry) {
   const container = document.getElementById("games-chart");
-  const { dates, perPlayer } = buildDailyGamesData(history, players);
+  const { dates, perPlayer } = buildDailyGamesData(history, players, liveEntry);
 
-  if (dates.length < 2) {
-    container.innerHTML = `<p class="empty-note">Only one day tracked so far — day-by-day changes need at least two tracked days to compare. Check back tomorrow.</p>`;
+  if (dates.length === 0) {
+    container.innerHTML = `<p class="empty-note">Not enough tracked days yet — check back tomorrow.</p>`;
     return;
   }
 
@@ -766,9 +804,9 @@ function heroRows(careerStats, heroesMeta, playerKey, sinceDate) {
       const dmg = cat.combat?.hero_damage_done ?? cat.combat?.all_damage_done ?? null;
       const deaths = cat.combat?.deaths ?? null;
 
-      const timeDelta = deltaSince(latestHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.time_played ?? 0) ?? 0;
-      const gamesDelta = deltaSince(latestHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.games_played ?? 0) ?? 0;
-      const winsDelta = deltaSince(latestHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.games_won ?? 0) ?? 0;
+      const timeDelta = deltaSince(latestRawHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.time_played ?? 0, latestLiveEntry) ?? 0;
+      const gamesDelta = deltaSince(latestRawHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.games_played ?? 0, latestLiveEntry) ?? 0;
+      const winsDelta = deltaSince(latestRawHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.games_won ?? 0, latestLiveEntry) ?? 0;
 
       const meta = heroesMeta[key];
       return {
@@ -790,9 +828,9 @@ function heroRows(careerStats, heroesMeta, playerKey, sinceDate) {
 
 function computeAllHeroesRow(active, sinceDate) {
   const seasonRow = computeStatsRow(active.career_stats);
-  const timeDelta = deltaSince(latestHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.time_played ?? null) ?? 0;
-  const gamesDelta = deltaSince(latestHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_played ?? null) ?? 0;
-  const winsDelta = deltaSince(latestHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_won ?? null) ?? 0;
+  const timeDelta = deltaSince(latestRawHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.time_played ?? null, latestLiveEntry) ?? 0;
+  const gamesDelta = deltaSince(latestRawHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_played ?? null, latestLiveEntry) ?? 0;
+  const winsDelta = deltaSince(latestRawHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_won ?? null, latestLiveEntry) ?? 0;
   return {
     key: "__all__",
     name: "All",
@@ -834,12 +872,7 @@ function renderChallengeHeroTable(active, heroesMeta) {
     emptyNote.textContent = "No competitive hero data this season yet.";
     return;
   }
-  if (latestHistory.length < 2) {
-    emptyNote.hidden = false;
-    emptyNote.textContent = "Only one day tracked so far, so time/games/win % below read zero — they need at least two tracked days to show a change. Check back tomorrow.";
-  } else {
-    emptyNote.hidden = true;
-  }
+  emptyNote.hidden = true;
   lastHeroMaxTime = Math.max(1, ...lastHeroRows.map((r) => r.timePlayed));
   renderHeroesTableBody();
 }
@@ -970,7 +1003,7 @@ function renderHeroPlaytimeSection(playerEntry, heroesMeta) {
   const heroKeys = Object.keys(playerEntry.career_stats || {}).filter((k) => k !== "all-heroes");
   const candidates = heroKeys
     .map((key) => {
-      const pts = dailySeries(latestHistory, playerEntry.key, (pd) => pd.career_stats?.[key]?.game?.time_played ?? 0);
+      const pts = dailySeries(latestRawHistory, playerEntry.key, (pd) => pd.career_stats?.[key]?.game?.time_played ?? 0, latestLiveEntry);
       const total = pts.reduce((s, pt) => s + pt.delta, 0);
       return { key, pts, total };
     })
@@ -981,9 +1014,7 @@ function renderHeroPlaytimeSection(playerEntry, heroesMeta) {
     subtabsEl.innerHTML = "";
     chartEl.innerHTML = "";
     emptyEl.hidden = false;
-    emptyEl.textContent = latestHistory.length < 2
-      ? "Need at least two tracked days to show daily playtime — check back tomorrow."
-      : "No tracked hero playtime yet during the challenge.";
+    emptyEl.textContent = "No tracked hero playtime yet during the challenge.";
     return;
   }
   emptyEl.hidden = true;
@@ -1100,22 +1131,31 @@ async function refresh() {
 
     const players = PLAYERS.map((p, i) => ({ ...p, ...liveResults[i] }));
 
-    // Merge today's live snapshot into the history used for the charts, so
-    // they reach "now" even between nightly GitHub Actions collections.
     const todayIso = isoDate(new Date());
-    const mergedHistory = history.filter((h) => h.date !== todayIso).concat([{
+    const liveEntry = {
       date: todayIso,
       collected_at: new Date().toISOString(),
       players: Object.fromEntries(players.map((p) => [p.key, p])),
-    }]).sort((a, b) => a.date.localeCompare(b.date));
+    };
 
+    // For rank/peak display: committed history with today's slot always
+    // shown live (there's no "anchor vs current" concept for a rank value).
+    const mergedHistory = history.filter((h) => h.date !== todayIso).concat([liveEntry])
+      .sort((a, b) => a.date.localeCompare(b.date));
     latestHistory = mergedHistory;
+
+    // For delta math (games/hero stats): the raw committed history is never
+    // touched — it's the anchor Day 0 (and every closed day after it) is
+    // measured against — with today's live reading passed alongside it,
+    // never in place of a committed entry.
+    latestRawHistory = history;
+    latestLiveEntry = liveEntry;
 
     renderPlayerCards(players);
     renderLegend(players, "rank-legend");
     renderLegend(players, "games-legend");
     renderLineChart(mergedHistory, players);
-    renderGamesChart(mergedHistory, players);
+    renderGamesChart(history, players, liveEntry);
     renderStatsTab(players);
     await renderHeroesTab(players);
     await renderStatsHeroSection(players);

@@ -1,5 +1,6 @@
 // Fetches current OverFast API stats for both players and upserts today's
-// entry (UTC date) into data/history.json. Run daily via GitHub Actions.
+// entry (CEST calendar date) into data/history.json. Run daily via GitHub
+// Actions, scheduled for 22:00 UTC = midnight CEST.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,16 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API_BASE = "https://overfast-api.tekrop.fr";
 const HISTORY_PATH = path.join(__dirname, "..", "data", "history.json");
+
+// The collector is scheduled to run at 22:00 UTC specifically because that's
+// midnight CEST — but 22:00 UTC is still the *previous* UTC calendar date, so
+// labeling by raw UTC date would make the nightly run overwrite today's entry
+// instead of starting tomorrow's. Shift by the CEST offset before slicing so
+// the date label matches the calendar day that's actually starting.
+const CEST_OFFSET_MS = 2 * 60 * 60 * 1000;
+function cestDate(date) {
+  return new Date(date.getTime() + CEST_OFFSET_MS).toISOString().slice(0, 10);
+}
 
 const PLAYERS = [
   { key: "skipp", battletag: "Skipp#2133", id: "Skipp-2133" },
@@ -60,7 +71,7 @@ async function main() {
     console.error(`Could not read/parse existing history.json, starting fresh: ${err.message}`);
   }
 
-  const today = new Date().toISOString().slice(0, 10); // UTC calendar date
+  const today = cestDate(new Date());
   const players = {};
   for (const p of PLAYERS) {
     players[p.key] = await collectPlayer(p);
