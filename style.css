@@ -308,6 +308,25 @@ h1 {
   background: var(--page-plane);
 }
 
+.stats-hero-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.select-control {
+  background: var(--page-plane);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+}
+
 .hero-subtabs {
   display: flex;
   gap: 8px;
@@ -544,6 +563,13 @@ h1 {
   background: var(--gridline);
 }
 .data-table .cell-muted { color: var(--text-muted); font-style: italic; }
+
+.data-table tr.row-total td {
+  font-weight: 700;
+  background: var(--page-plane);
+  border-bottom: 2px solid var(--border);
+}
+.data-table tr.row-total .cell-hero { font-weight: 700; }
 
 .time-bar-track {
   position: relative;

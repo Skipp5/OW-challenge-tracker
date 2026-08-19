@@ -39,7 +39,6 @@
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button class="tab-btn is-active" role="tab" aria-selected="true" aria-controls="panel-overview" id="tab-overview" data-tab="overview" type="button">Overview</button>
       <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-stats" id="tab-stats" data-tab="stats" type="button">Stats</button>
-      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-heroes" id="tab-heroes" data-tab="heroes" type="button">Heroes</button>
     </nav>
 
     <section class="tab-panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
@@ -88,8 +87,16 @@
 
       <div class="chart-section">
         <div class="chart-section-head">
-          <h2>Hero stats since challenge start</h2>
-          <div class="player-switch" id="stats-hero-player-switch"></div>
+          <h2>Hero stats</h2>
+          <div class="stats-hero-controls">
+            <select id="hero-stats-lookback" class="select-control">
+              <option value="challenge">Since challenge start</option>
+              <option value="1">Last 1 day</option>
+              <option value="5">Last 5 days</option>
+              <option value="10">Last 10 days</option>
+            </select>
+            <div class="player-switch" id="stats-hero-player-switch"></div>
+          </div>
         </div>
         <div class="table-wrap">
           <table id="heroes-table" class="data-table">
@@ -110,12 +117,10 @@
         </div>
         <p id="heroes-empty" class="empty-note" hidden></p>
       </div>
-    </section>
 
-    <section class="tab-panel" id="panel-heroes" role="tabpanel" aria-labelledby="tab-heroes" hidden>
       <div class="chart-section">
         <div class="chart-section-head">
-          <h2>Hero playtime per day</h2>
+          <h2>Hero playtime</h2>
           <div class="player-switch" id="hero-player-switch"></div>
         </div>
         <div id="hero-subtabs" class="hero-subtabs"></div>

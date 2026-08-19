@@ -31,6 +31,7 @@ let heroesMetaCache = null;
 let latestHistory = [];
 let heroTabPlayerKey = PLAYERS[0].key;
 let statsHeroPlayerKey = PLAYERS[0].key;
+let heroStatsLookback = "challenge";
 const heroPlaytimeSelected = {}; // playerKey -> heroKey
 
 /* ---------------------------------------------------------------------
@@ -209,6 +210,38 @@ function dailySeries(history, playerKey, getValue) {
     prev = value;
   });
   return points;
+}
+
+// Same idea as dailySeries, but as a single before/after delta rather than
+// a per-day series: value at the latest tracked snapshot minus the value at
+// the latest snapshot on or before sinceDate (clamped to the earliest data
+// available if sinceDate is before tracking began).
+function playerValueSeries(history, playerKey, getValue) {
+  const points = [];
+  history.forEach((entry) => {
+    const pdata = entry.players?.[playerKey];
+    if (!pdata || !pdata.ok) return;
+    const value = getValue(pdata);
+    if (value === null || value === undefined) return;
+    points.push({ date: new Date(entry.date + "T12:00:00Z"), value });
+  });
+  return points;
+}
+
+function deltaSince(history, playerKey, sinceDate, getValue) {
+  const points = playerValueSeries(history, playerKey, getValue);
+  if (points.length === 0) return null;
+  const latest = points[points.length - 1].value;
+  let baseline = points[0].value;
+  for (const pt of points) {
+    if (pt.date <= sinceDate) baseline = pt.value; else break;
+  }
+  return Math.max(0, latest - baseline);
+}
+
+function lookbackCutoffDate(mode) {
+  if (mode === "challenge") return CHALLENGE_START;
+  return new Date(Date.now() - Number(mode) * 86400000);
 }
 
 /* ---------------------------------------------------------------------
@@ -716,12 +749,12 @@ function renderStatsTableBody() {
  * Stats tab: hero stats since challenge start
  * ------------------------------------------------------------------- */
 
-// Time played / games / win% are counted only since the challenge began
-// (day-by-day deltas off the tracked snapshots) — season-long history from
-// before the challenge doesn't count. Avg elims/dmg/deaths can't be isolated
-// to "just this challenge" without match-by-match data, so those stay as
-// the season-wide per-game averages the API actually gives us.
-function heroRows(careerStats, heroesMeta, playerKey) {
+// Time played / games / win% are counted only since sinceDate (a delta off
+// the tracked snapshots) — season-long history from before that doesn't
+// count. Avg elims/dmg/deaths can't be isolated to a window without
+// match-by-match data, so those stay as the season-wide per-game averages
+// the API actually gives us.
+function heroRows(careerStats, heroesMeta, playerKey, sinceDate) {
   if (!careerStats) return [];
   return Object.entries(careerStats)
     .filter(([key]) => key !== "all-heroes")
@@ -733,12 +766,9 @@ function heroRows(careerStats, heroesMeta, playerKey) {
       const dmg = cat.combat?.hero_damage_done ?? cat.combat?.all_damage_done ?? null;
       const deaths = cat.combat?.deaths ?? null;
 
-      const timeDelta = dailySeries(latestHistory, playerKey, (pd) => pd.career_stats?.[key]?.game?.time_played ?? 0)
-        .reduce((s, pt) => s + pt.delta, 0);
-      const gamesDelta = dailySeries(latestHistory, playerKey, (pd) => pd.career_stats?.[key]?.game?.games_played ?? 0)
-        .reduce((s, pt) => s + pt.delta, 0);
-      const winsDelta = dailySeries(latestHistory, playerKey, (pd) => pd.career_stats?.[key]?.game?.games_won ?? 0)
-        .reduce((s, pt) => s + pt.delta, 0);
+      const timeDelta = deltaSince(latestHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.time_played ?? 0) ?? 0;
+      const gamesDelta = deltaSince(latestHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.games_played ?? 0) ?? 0;
+      const winsDelta = deltaSince(latestHistory, playerKey, sinceDate, (pd) => pd.career_stats?.[key]?.game?.games_won ?? 0) ?? 0;
 
       const meta = heroesMeta[key];
       return {
@@ -758,23 +788,46 @@ function heroRows(careerStats, heroesMeta, playerKey) {
     .sort((a, b) => b.timePlayed - a.timePlayed);
 }
 
+function computeAllHeroesRow(active, sinceDate) {
+  const seasonRow = computeStatsRow(active.career_stats);
+  const timeDelta = deltaSince(latestHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.time_played ?? null) ?? 0;
+  const gamesDelta = deltaSince(latestHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_played ?? null) ?? 0;
+  const winsDelta = deltaSince(latestHistory, active.key, sinceDate, (pd) => pd.career_stats?.["all-heroes"]?.game?.games_won ?? null) ?? 0;
+  return {
+    key: "__all__",
+    name: "All",
+    portrait: "",
+    role: "—",
+    timePlayed: timeDelta,
+    games: gamesDelta,
+    winPct: gamesDelta > 0 ? (winsDelta / gamesDelta) * 100 : null,
+    avgElims: seasonRow?.avgElims ?? null,
+    avgDmg: seasonRow?.avgDmg ?? null,
+    avgDeaths: seasonRow?.avgDeaths ?? null,
+  };
+}
+
 const heroesSortState = { key: "timePlayed", dir: "desc" };
 let lastHeroRows = [];
+let lastHeroAllRow = null;
 let lastHeroMaxTime = 0;
 let lastHeroActivePlayer = null;
 
 function renderChallengeHeroTable(active, heroesMeta) {
   lastHeroActivePlayer = active;
   const emptyNote = document.getElementById("heroes-empty");
+  const sinceDate = lookbackCutoffDate(heroStatsLookback);
 
   if (!active || !active.ok) {
     lastHeroRows = [];
+    lastHeroAllRow = null;
     document.getElementById("heroes-table-body").innerHTML = "";
     emptyNote.hidden = false;
     emptyNote.textContent = "Profile unavailable for this player.";
     return;
   }
-  lastHeroRows = heroRows(active.career_stats, heroesMeta, active.key);
+  lastHeroRows = heroRows(active.career_stats, heroesMeta, active.key, sinceDate);
+  lastHeroAllRow = computeAllHeroesRow(active, sinceDate);
   if (lastHeroRows.length === 0) {
     document.getElementById("heroes-table-body").innerHTML = "";
     emptyNote.hidden = false;
@@ -782,15 +835,27 @@ function renderChallengeHeroTable(active, heroesMeta) {
     return;
   }
   emptyNote.hidden = true;
-  lastHeroMaxTime = Math.max(...lastHeroRows.map((r) => r.timePlayed));
+  lastHeroMaxTime = Math.max(1, ...lastHeroRows.map((r) => r.timePlayed));
   renderHeroesTableBody();
 }
 
 function renderHeroesTableBody() {
   const body = document.getElementById("heroes-table-body");
   const sorted = sortRows(lastHeroRows, heroesSortState);
-  body.innerHTML = sorted.map((r) => {
-    const pct = lastHeroMaxTime > 0 ? clamp((r.timePlayed / lastHeroMaxTime) * 100, 0, 100) : 0;
+  const allRowHtml = lastHeroAllRow ? `
+    <tr class="row-total">
+      <td class="cell-hero">${lastHeroAllRow.name}</td>
+      <td>${lastHeroAllRow.role}</td>
+      <td>${fmtDuration(lastHeroAllRow.timePlayed)}</td>
+      <td>${fmtInt(lastHeroAllRow.games)}</td>
+      <td>${fmtPct(lastHeroAllRow.winPct)}</td>
+      <td>${fmtAvg(lastHeroAllRow.avgElims)}</td>
+      <td>${fmtInt(lastHeroAllRow.avgDmg)}</td>
+      <td>${fmtAvg(lastHeroAllRow.avgDeaths)}</td>
+    </tr>
+  ` : "";
+  const heroRowsHtml = sorted.map((r) => {
+    const pct = clamp((r.timePlayed / lastHeroMaxTime) * 100, 0, 100);
     return `
     <tr>
       <td class="cell-hero">${r.portrait ? `<img src="${r.portrait}" alt="" />` : ""}${r.name}</td>
@@ -810,6 +875,7 @@ function renderHeroesTableBody() {
     </tr>
   `;
   }).join("");
+  body.innerHTML = allRowHtml + heroRowsHtml;
 }
 
 /* ---------------------------------------------------------------------
@@ -1062,6 +1128,11 @@ async function refresh() {
 }
 
 document.getElementById("refresh-btn").addEventListener("click", refresh);
+
+document.getElementById("hero-stats-lookback").addEventListener("change", (e) => {
+  heroStatsLookback = e.target.value;
+  renderStatsHeroSection(currentPlayers);
+});
 
 wireTabs();
 wireSortableHeaders("#stats-table thead", statsSortState, renderStatsTableBody);
