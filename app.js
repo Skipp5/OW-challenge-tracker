@@ -308,26 +308,35 @@ function liveValueFor(liveEntry, playerKey, getValue) {
   return value === null || value === undefined ? null : value;
 }
 
-// Value at the latest tracked snapshot (live, if today isn't closed yet)
-// minus the value at the latest COMMITTED snapshot on or before sinceDate
-// (clamped to the earliest data available if sinceDate predates tracking).
-function deltaSince(history, playerKey, sinceDate, getValue, liveEntry) {
-  const committed = committedPoints(history, playerKey, getValue);
+// Value at the latest tracked snapshot (live, if available) minus that
+// stat's OPENING value on startDateStr — the day's frozen first-poll
+// snapshot, not "whatever the previous day happened to close at." If
+// startDateStr isn't itself a tracked day (predates tracking, or falls in
+// a gap the collector missed), falls forward to the nearest tracked day's
+// opening (clamped to the earliest data available).
+function deltaSince(history, playerKey, startDateStr, getValue, liveEntry) {
   const liveValue = liveValueFor(liveEntry, playerKey, getValue);
-  const latest = liveValue !== null ? liveValue : (committed.length > 0 ? committed[committed.length - 1].value : null);
-  if (latest === null) return null;
-  if (committed.length === 0) return 0;
-
-  let baseline = committed[0].value;
-  for (const pt of committed) {
-    if (new Date(pt.date + "T12:00:00Z") <= sinceDate) baseline = pt.value; else break;
+  let latest = liveValue;
+  if (latest === null && history.length > 0) {
+    const lastCurrent = history[history.length - 1].players?.[playerKey];
+    if (lastCurrent?.ok) latest = getValue(lastCurrent);
   }
+  if (latest === null || latest === undefined) return null;
+  if (history.length === 0) return 0;
+
+  const baselineEntry = history.find((h) => h.date >= startDateStr) || history[history.length - 1];
+  const opening = baselineEntry.opening_players?.[playerKey];
+  const baseline = opening?.ok ? getValue(opening) : null;
+  if (baseline === null || baseline === undefined) return 0;
+
   return Math.max(0, latest - baseline);
 }
 
-function lookbackCutoffDate(mode) {
-  if (mode === "challenge") return CHALLENGE_START;
-  return new Date(Date.now() - Number(mode) * 86400000);
+// Date string (CEST calendar day) that a lookback mode's window starts on.
+function lookbackStartDateStr(mode) {
+  if (mode === "challenge") return isoDate(CHALLENGE_START);
+  const days = Number(mode);
+  return isoDate(new Date(Date.now() - (days - 1) * 86400000));
 }
 
 /* ---------------------------------------------------------------------
@@ -905,7 +914,7 @@ let lastHeroActivePlayer = null;
 function renderChallengeHeroTable(active, heroesMeta) {
   lastHeroActivePlayer = active;
   const emptyNote = document.getElementById("heroes-empty");
-  const sinceDate = lookbackCutoffDate(heroStatsLookback);
+  const sinceDate = lookbackStartDateStr(heroStatsLookback);
 
   if (!active || !active.ok) {
     lastHeroRows = [];
