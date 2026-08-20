@@ -1,12 +1,13 @@
 // Fetches current OverFast API stats for both players. Upserts today's
-// entry (CEST calendar date) into data/history.json — one entry per day is
-// enough for every *cumulative* stat (games played, time played, etc.),
-// since delta = end-of-day minus start-of-day is correct no matter how many
-// times a day gets polled. Separately appends to data/rank_history.json,
-// but only when a player's rank actually changed since the last recorded
-// entry — rank isn't cumulative (it can go up and back down within a day),
-// so catching that requires an actual observation at the moment of change,
-// not just a once-daily snapshot. Run on a schedule via GitHub Actions.
+// entry (CEST calendar date) into data/history.json — one entry per day,
+// holding both the day's frozen opening value and its continuously-updated
+// current value, so each day's own delta (current minus opening) is
+// self-contained and doesn't depend on neighboring days. Separately appends
+// to data/rank_history.json, but only when a player's rank actually changed
+// since the last recorded entry — rank isn't cumulative (it can go up and
+// back down within a day), so catching that requires an actual observation
+// at the moment of change, not just a periodic snapshot. Run on a schedule
+// via GitHub Actions.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,9 +90,20 @@ async function main() {
     players[p.key] = await collectPlayer(p);
   }
 
-  const entry = { date: today, collected_at: new Date().toISOString(), players };
+  // opening_players is frozen at the first poll of the day and never
+  // touched again — it's the anchor "how many games did today add" is
+  // measured against. players is updated on every poll and reflects
+  // wherever the day currently stands (or, once the day is over, its
+  // final value). Without keeping both, a day polled every 20 minutes
+  // would only ever show "value as of the last poll," with no way to
+  // recover what it started at.
   const idx = history.findIndex((h) => h.date === today);
-  if (idx >= 0) history[idx] = entry; else history.push(entry);
+  if (idx >= 0) {
+    history[idx].collected_at = new Date().toISOString();
+    history[idx].players = players;
+  } else {
+    history.push({ date: today, collected_at: new Date().toISOString(), opening_players: players, players });
+  }
   history.sort((a, b) => a.date.localeCompare(b.date));
   await writeFile(HISTORY_PATH, JSON.stringify(history, null, 2) + "\n");
   console.log(`Snapshot for ${today} saved (${history.length} day(s) total).`);

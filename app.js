@@ -244,15 +244,10 @@ async function loadRankHistory() {
   }
 }
 
-// Reduces raw history + a live snapshot down to one {date, value} per
-// player for a given cumulative career stat, in chronological order.
-// Every *committed* day (from data/history.json) is kept exactly as
-// recorded — nothing here ever discards or overwrites an already-closed
-// snapshot. If today hasn't been committed yet (or the collector's most
-// recent commit IS today, but the day isn't over), the live reading
-// becomes that day's current value; the previous commit — Day 0's own
-// first-ever snapshot included — always stays intact as the anchor
-// underneath it.
+// Reduces raw committed history down to one {date, value} per player for a
+// given cumulative career stat (using each day's *current* — i.e. latest —
+// value), in chronological order. Used where only "value as of around a
+// given time" matters, not what happened within any one specific day.
 function committedPoints(history, playerKey, getValue) {
   const points = [];
   history.forEach((entry) => {
@@ -265,29 +260,37 @@ function committedPoints(history, playerKey, getValue) {
   return points; // history is pre-sorted ascending
 }
 
-// Per-player day-by-day delta of a cumulative career stat. Each *closed*
-// day's delta is fixed — the value at the START of the NEXT tracked day
-// minus the value at the start of this one (so it reflects everything
-// that happened during that calendar day, however many refreshes or
-// re-collections touched it). The most recent tracked day has no "next"
-// snapshot yet, so it's still open: its delta is live-current minus its
-// own committed value, and grows on every refresh until a newer day's
-// snapshot closes it.
+// Per-player day-by-day delta of a cumulative career stat. Each day is
+// self-contained: delta = its current value minus its own frozen opening
+// value (the first poll of that day, recorded once and never touched
+// again by the collector) — so it doesn't matter how many times a day
+// gets polled in between, or how it compares to neighboring days. For the
+// most recent tracked day, "current" is replaced with the live reading
+// where available, so today's delta keeps growing between polls.
 function dailySeries(history, playerKey, getValue, liveEntry) {
-  const committed = committedPoints(history, playerKey, getValue);
   const points = [];
 
-  for (let i = 0; i < committed.length - 1; i++) {
-    const delta = Math.max(0, committed[i + 1].value - committed[i].value);
-    points.push({ date: new Date(committed[i].date + "T12:00:00Z"), delta, value: committed[i].value });
-  }
+  history.forEach((entry) => {
+    const opening = entry.opening_players?.[playerKey];
+    const current = entry.players?.[playerKey];
+    if (!opening?.ok || !current?.ok) return;
+    const openingValue = getValue(opening);
+    if (openingValue === null || openingValue === undefined) return;
 
-  if (committed.length > 0) {
-    const last = committed[committed.length - 1];
-    const liveValue = liveValueFor(liveEntry, playerKey, getValue);
-    const current = liveValue !== null ? liveValue : last.value;
-    points.push({ date: new Date(last.date + "T12:00:00Z"), delta: Math.max(0, current - last.value), value: current });
-  } else {
+    let currentValue = getValue(current);
+    if (liveEntry && liveEntry.date === entry.date) {
+      const liveValue = liveValueFor(liveEntry, playerKey, getValue);
+      if (liveValue !== null) currentValue = liveValue;
+    }
+    if (currentValue === null || currentValue === undefined) return;
+
+    points.push({ date: new Date(entry.date + "T12:00:00Z"), delta: Math.max(0, currentValue - openingValue), value: currentValue });
+  });
+
+  // Today hasn't been polled by the collector at all yet — no opening
+  // value exists to compare against, so show it as a fresh day (0 so far)
+  // rather than front-loading the season's pre-tracking total onto it.
+  if (liveEntry && !history.some((h) => h.date === liveEntry.date)) {
     const liveValue = liveValueFor(liveEntry, playerKey, getValue);
     if (liveValue !== null) {
       points.push({ date: new Date(liveEntry.date + "T12:00:00Z"), delta: 0, value: liveValue });
