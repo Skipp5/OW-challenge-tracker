@@ -28,8 +28,7 @@ const CHALLENGE_START = new Date("2026-08-19T00:00:00Z");
 const CHALLENGE_END = new Date("2026-09-13T23:59:59Z");
 
 let heroesMetaCache = null;
-let latestHistory = []; // committed history + live "today" merged in — for peak/rank display
-let latestRawHistory = []; // committed history only, untouched — the anchor for delta math
+let latestRawHistory = []; // committed history only, untouched — the anchor for delta math and the rank chart
 let latestLiveEntry = null; // today's live snapshot, kept separate from latestRawHistory
 let heroTabPlayerKey = PLAYERS[0].key;
 let statsHeroPlayerKey = PLAYERS[0].key;
@@ -78,18 +77,88 @@ function highestRank(competitive) {
   return best;
 }
 
-// Scans every tracked snapshot for a player and returns the single
-// highest-scoring rank ever recorded (the "peak"), independent of what
-// their current rank is.
+// Scans every tracked snapshot for a player — including intraday rank-change
+// events recorded via the browser (see recordRankEventIfChanged) — and
+// returns the single highest-scoring rank ever recorded (the "peak"),
+// independent of what their current rank is.
 function computePeakRank(history, playerKey) {
+  const points = buildPlayerRankPoints(history, playerKey, loadRankEvents(playerKey));
   let best = null;
+  points.forEach((pt) => {
+    if (!best || pt.score > best.score) best = pt;
+  });
+  return best; // { date, score, label, roleLabel }
+}
+
+/* ---------------------------------------------------------------------
+ * Rank-change events (localStorage) — permanently records intraday rank
+ * changes detected on refresh, since a static site can't write to the
+ * shared repo from the browser. Per-browser, not synced across devices,
+ * but any refresh (by either player) checks both players' live ranks.
+ * ------------------------------------------------------------------- */
+
+const RANK_EVENTS_KEY_PREFIX = "ow-rank-events-";
+
+function loadRankEvents(playerKey) {
+  try {
+    const raw = localStorage.getItem(RANK_EVENTS_KEY_PREFIX + playerKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRankEvents(playerKey, events) {
+  try {
+    localStorage.setItem(RANK_EVENTS_KEY_PREFIX + playerKey, JSON.stringify(events));
+  } catch {
+    // localStorage unavailable (private browsing, quota, etc.) — degrade silently.
+  }
+}
+
+// Merges committed history (real collected_at timestamps) with recorded
+// rank-change events into one chronological, plottable point series.
+function buildPlayerRankPoints(history, playerKey, events) {
+  const points = [];
   history.forEach((entry) => {
     const pdata = entry.players?.[playerKey];
     if (!pdata || !pdata.ok) return;
-    const current = highestRank(pdata.competitive);
-    if (current && (!best || current.score > best.score)) best = current;
+    const peak = highestRank(pdata.competitive);
+    if (!peak) return;
+    points.push({
+      date: new Date(entry.collected_at || `${entry.date}T12:00:00Z`),
+      score: peak.score,
+      label: rankText(peak.entry),
+      roleLabel: peak.roleLabel,
+    });
   });
-  return best;
+  events.forEach((ev) => {
+    if (ev.score === null || ev.score === undefined || !ev.entry) return;
+    points.push({ date: new Date(ev.timestamp), score: ev.score, label: rankText(ev.entry), roleLabel: ev.roleLabel });
+  });
+  points.sort((a, b) => a.date - b.date);
+  return points;
+}
+
+// Checks a player's live rank against the latest already-known point
+// (committed history + prior events) and, if it changed, permanently
+// records a new timestamped event.
+function recordRankEventIfChanged(history, player) {
+  if (!player.ok) return;
+  const current = highestRank(player.competitive);
+  const currentScore = current ? current.score : null;
+  const events = loadRankEvents(player.key);
+  const known = buildPlayerRankPoints(history, player.key, events);
+  const lastScore = known.length > 0 ? known[known.length - 1].score : null;
+  if (currentScore === lastScore) return;
+  events.push({
+    timestamp: new Date().toISOString(),
+    score: currentScore,
+    entry: current ? current.entry : null,
+    roleLabel: current ? current.roleLabel : null,
+  });
+  saveRankEvents(player.key, events);
 }
 
 /* ---------------------------------------------------------------------
@@ -343,7 +412,7 @@ function renderPlayerCards(players) {
 
     const d = p;
     const current = highestRank(d.competitive);
-    const best = computePeakRank(latestHistory, p.key);
+    const best = computePeakRank(latestRawHistory, p.key);
 
     card.innerHTML = `
       <div class="player-card-head">
@@ -359,7 +428,7 @@ function renderPlayerCards(players) {
           <div>
             <p class="player-peak-division">${rankText(current.entry)}</p>
             <p class="player-peak-role">${current.roleIcon ? `<img src="${current.roleIcon}" alt="" />` : ""}${current.roleLabel}</p>
-            ${best ? `<p class="player-peak-best">Peak: ${rankText(best.entry)}</p>` : ""}
+            ${best ? `<p class="player-peak-best">Peak: ${best.label}</p>` : ""}
           </div>
         </div>
       ` : `<p class="player-card-empty">Unranked this season</p>`}
@@ -423,19 +492,23 @@ function rcX(date) {
 
 function buildRankSeries(history, players) {
   const series = {};
-  players.forEach((p) => { series[p.key] = []; });
-  history.forEach((entry) => {
-    const date = new Date(entry.date + "T12:00:00Z");
-    players.forEach((p) => {
-      const pdata = entry.players?.[p.key];
-      if (!pdata || !pdata.ok) return;
-      const peak = highestRank(pdata.competitive);
-      if (!peak) return;
-      series[p.key].push({ date, score: peak.score, label: rankText(peak.entry), roleLabel: peak.roleLabel });
-    });
+  players.forEach((p) => {
+    series[p.key] = buildPlayerRankPoints(history, p.key, p.ok ? loadRankEvents(p.key) : []);
   });
-  players.forEach((p) => series[p.key].sort((a, b) => a.date - b.date));
   return series;
+}
+
+// Step-after polyline: holds flat at the old value until the exact moment
+// of the next recorded point, then jumps — matching how rank actually
+// moves (in discrete jumps between matches), rather than implying a
+// gradual climb between two far-apart timestamps.
+function stepPointsAttr(pts, xFn, yFn) {
+  const coords = [];
+  pts.forEach((pt, i) => {
+    coords.push(`${xFn(pt.date)},${yFn(pt.score)}`);
+    if (i < pts.length - 1) coords.push(`${xFn(pts[i + 1].date)},${yFn(pt.score)}`);
+  });
+  return coords.join(" ");
 }
 
 // Zooms the y-axis to one division below the lowest achieved rank through
@@ -495,7 +568,7 @@ function renderLineChart(history, players) {
   const lines = players.map((p) => {
     const pts = series[p.key];
     if (pts.length === 0) return "";
-    const pointsAttr = pts.map((pt) => `${rcX(pt.date)},${rcY(pt.score)}`).join(" ");
+    const pointsAttr = stepPointsAttr(pts, rcX, rcY);
     const dots = pts.map((pt) => `<circle class="cw-dot" cx="${rcX(pt.date)}" cy="${rcY(pt.score)}" r="4.5" fill="var(${p.varName})" />`).join("");
     const last = pts[pts.length - 1];
     const endLabel = `
@@ -509,14 +582,15 @@ function renderLineChart(history, players) {
     `;
   }).join("");
 
-  const allDates = [...new Set(players.flatMap((p) => series[p.key].map((pt) => isoDate(pt.date))))].sort();
-  const hits = allDates.map((iso, i) => {
-    const d = new Date(iso + "T12:00:00Z");
-    const x = rcX(d);
-    const prevX = i > 0 ? rcX(new Date(allDates[i - 1] + "T12:00:00Z")) : RC_MARGIN.left;
-    const nextX = i < allDates.length - 1 ? rcX(new Date(allDates[i + 1] + "T12:00:00Z")) : RC_MARGIN.left + RC_PLOT_W;
+  // Hit-test by exact timestamp rather than calendar day, since a single
+  // day can now hold multiple recorded rank-change points.
+  const allTimes = [...new Set(players.flatMap((p) => series[p.key].map((pt) => pt.date.getTime())))].sort((a, b) => a - b);
+  const hits = allTimes.map((t, i) => {
+    const x = rcX(new Date(t));
+    const prevX = i > 0 ? rcX(new Date(allTimes[i - 1])) : RC_MARGIN.left;
+    const nextX = i < allTimes.length - 1 ? rcX(new Date(allTimes[i + 1])) : RC_MARGIN.left + RC_PLOT_W;
     const left = (prevX + x) / 2, right = (x + nextX) / 2;
-    return `<rect class="cw-hit" data-date="${iso}" x="${left}" y="${RC_MARGIN.top}" width="${Math.max(1, right - left)}" height="${RC_PLOT_H}" fill="transparent" />`;
+    return `<rect class="cw-hit" data-t="${t}" x="${left}" y="${RC_MARGIN.top}" width="${Math.max(1, right - left)}" height="${RC_PLOT_H}" fill="transparent" />`;
   }).join("");
 
   container.innerHTML = `
@@ -531,19 +605,19 @@ function renderLineChart(history, players) {
   `;
 
   wireHover(container, RC_W, RC_H, (strip, { tooltip, hoverLine, scaleX, scaleY }) => {
-    const iso = strip.getAttribute("data-date");
-    const date = new Date(iso + "T12:00:00Z");
+    const t = Number(strip.getAttribute("data-t"));
+    const date = new Date(t);
     const x = rcX(date);
     hoverLine.setAttribute("x1", x);
     hoverLine.setAttribute("x2", x);
     hoverLine.style.opacity = "1";
 
     const rows = players.map((p) => {
-      const pt = series[p.key].find((s) => isoDate(s.date) === iso);
+      const pt = series[p.key].find((s) => s.date.getTime() === t);
       if (!pt) return "";
       return `<div class="cw-tooltip-row"><span class="cw-tooltip-swatch" style="background:var(${p.varName})"></span>${p.battletag.split("#")[0]}: ${pt.label} <span class="cw-tooltip-sub">(${pt.roleLabel})</span></div>`;
     }).join("");
-    placeTooltip(tooltip, x, RC_MARGIN.top - 8, scaleX, scaleY, `<div class="cw-tooltip-date">${fmtDate(date)}</div>${rows}`);
+    placeTooltip(tooltip, x, RC_MARGIN.top - 8, scaleX, scaleY, `<div class="cw-tooltip-date">${fmtDateTime(date)}</div>${rows}`);
   });
 }
 
@@ -1122,6 +1196,10 @@ async function refresh() {
   const btn = document.getElementById("refresh-btn");
   btn.classList.add("spinning");
   btn.disabled = true;
+  // OverFast's responses are often cache-hits and return in well under
+  // 100ms, too fast for the 0.7s spin animation to read as "it did
+  // something" — guarantee it's visible for at least half a second.
+  const minSpin = new Promise((resolve) => setTimeout(resolve, 500));
 
   try {
     const [liveResults, history] = await Promise.all([
@@ -1138,23 +1216,21 @@ async function refresh() {
       players: Object.fromEntries(players.map((p) => [p.key, p])),
     };
 
-    // For rank/peak display: committed history with today's slot always
-    // shown live (there's no "anchor vs current" concept for a rank value).
-    const mergedHistory = history.filter((h) => h.date !== todayIso).concat([liveEntry])
-      .sort((a, b) => a.date.localeCompare(b.date));
-    latestHistory = mergedHistory;
-
-    // For delta math (games/hero stats): the raw committed history is never
-    // touched — it's the anchor Day 0 (and every closed day after it) is
-    // measured against — with today's live reading passed alongside it,
-    // never in place of a committed entry.
+    // The raw committed history is never touched — it's the anchor Day 0
+    // (and every closed day after it) is measured against, for both the
+    // games/hero-stats deltas and the rank chart. Today's live reading
+    // travels alongside it, never in place of a committed entry.
     latestRawHistory = history;
     latestLiveEntry = liveEntry;
+
+    // Rank changes get checked (and, if new, permanently recorded to
+    // localStorage) on every refresh, before anything reads them.
+    players.forEach((p) => recordRankEventIfChanged(history, p));
 
     renderPlayerCards(players);
     renderLegend(players, "rank-legend");
     renderLegend(players, "games-legend");
-    renderLineChart(mergedHistory, players);
+    renderLineChart(history, players);
     renderGamesChart(history, players, liveEntry);
     renderStatsTab(players);
     await renderHeroesTab(players);
@@ -1167,6 +1243,7 @@ async function refresh() {
   } catch (err) {
     document.getElementById("last-checked").textContent = `Refresh failed: ${err.message}`;
   } finally {
+    await minSpin;
     btn.classList.remove("spinning");
     btn.disabled = false;
   }
