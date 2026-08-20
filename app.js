@@ -6,6 +6,7 @@
 
 const API_BASE = "https://overfast-api.tekrop.fr";
 const HISTORY_URL = "data/history.json";
+const RANK_HISTORY_URL = "data/rank_history.json";
 
 const PLAYERS = [
   { key: "skipp", battletag: "Skipp#2133", id: "Skipp-2133", varName: "--series-1", shadeVar: "--series-1-shade2" },
@@ -29,6 +30,7 @@ const CHALLENGE_END = new Date("2026-09-13T23:59:59Z");
 
 let heroesMetaCache = null;
 let latestRawHistory = []; // committed history only, untouched — the anchor for delta math and the rank chart
+let latestRankHistory = []; // data/rank_history.json — change-only intraday rank events, shared via the repo
 let latestLiveEntry = null; // today's live snapshot, kept separate from latestRawHistory
 let heroTabPlayerKey = PLAYERS[0].key;
 let statsHeroPlayerKey = PLAYERS[0].key;
@@ -77,49 +79,12 @@ function highestRank(competitive) {
   return best;
 }
 
-// Scans every tracked snapshot for a player — including intraday rank-change
-// events recorded via the browser (see recordRankEventIfChanged) — and
-// returns the single highest-scoring rank ever recorded (the "peak"),
-// independent of what their current rank is.
-function computePeakRank(history, playerKey) {
-  const points = buildPlayerRankPoints(history, playerKey, loadRankEvents(playerKey));
-  let best = null;
-  points.forEach((pt) => {
-    if (!best || pt.score > best.score) best = pt;
-  });
-  return best; // { date, score, label, roleLabel }
-}
-
-/* ---------------------------------------------------------------------
- * Rank-change events (localStorage) — permanently records intraday rank
- * changes detected on refresh, since a static site can't write to the
- * shared repo from the browser. Per-browser, not synced across devices,
- * but any refresh (by either player) checks both players' live ranks.
- * ------------------------------------------------------------------- */
-
-const RANK_EVENTS_KEY_PREFIX = "ow-rank-events-";
-
-function loadRankEvents(playerKey) {
-  try {
-    const raw = localStorage.getItem(RANK_EVENTS_KEY_PREFIX + playerKey);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveRankEvents(playerKey, events) {
-  try {
-    localStorage.setItem(RANK_EVENTS_KEY_PREFIX + playerKey, JSON.stringify(events));
-  } catch {
-    // localStorage unavailable (private browsing, quota, etc.) — degrade silently.
-  }
-}
-
-// Merges committed history (real collected_at timestamps) with recorded
-// rank-change events into one chronological, plottable point series.
-function buildPlayerRankPoints(history, playerKey, events) {
+// Merges the daily committed history (real collected_at timestamps) with
+// data/rank_history.json's change-only events into one chronological,
+// plottable point series for a player. History gives at least one point
+// per tracked day (a flat baseline); rank_history.json adds extra points
+// whenever the collector caught an actual rank change that day.
+function buildPlayerRankPoints(history, rankHistory, playerKey) {
   const points = [];
   history.forEach((entry) => {
     const pdata = entry.players?.[playerKey];
@@ -133,32 +98,33 @@ function buildPlayerRankPoints(history, playerKey, events) {
       roleLabel: peak.roleLabel,
     });
   });
-  events.forEach((ev) => {
-    if (ev.score === null || ev.score === undefined || !ev.entry) return;
-    points.push({ date: new Date(ev.timestamp), score: ev.score, label: rankText(ev.entry), roleLabel: ev.roleLabel });
+  rankHistory.forEach((ev) => {
+    const competitive = ev.players?.[playerKey];
+    if (!competitive) return;
+    const peak = highestRank(competitive);
+    if (!peak) return;
+    points.push({ date: new Date(ev.timestamp), score: peak.score, label: rankText(peak.entry), roleLabel: peak.roleLabel });
   });
   points.sort((a, b) => a.date - b.date);
   return points;
 }
 
-// Checks a player's live rank against the latest already-known point
-// (committed history + prior events) and, if it changed, permanently
-// records a new timestamped event.
-function recordRankEventIfChanged(history, player) {
-  if (!player.ok) return;
-  const current = highestRank(player.competitive);
-  const currentScore = current ? current.score : null;
-  const events = loadRankEvents(player.key);
-  const known = buildPlayerRankPoints(history, player.key, events);
-  const lastScore = known.length > 0 ? known[known.length - 1].score : null;
-  if (currentScore === lastScore) return;
-  events.push({
-    timestamp: new Date().toISOString(),
-    score: currentScore,
-    entry: current ? current.entry : null,
-    roleLabel: current ? current.roleLabel : null,
+// Scans every tracked snapshot and recorded rank-change event for a player
+// and returns the single highest-scoring rank ever recorded (the "peak"),
+// independent of what their current rank is.
+function computePeakRank(history, rankHistory, playerKey) {
+  const points = buildPlayerRankPoints(history, rankHistory, playerKey);
+  let best = null;
+  points.forEach((pt) => {
+    if (!best || pt.score > best.score) best = pt;
   });
-  saveRankEvents(player.key, events);
+  return best; // { date, score, label, roleLabel }
+}
+
+function pickBetterRank(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return b.score > a.score ? b : a;
 }
 
 /* ---------------------------------------------------------------------
@@ -261,6 +227,16 @@ async function loadHeroesMeta() {
 async function loadHistory() {
   try {
     const res = await fetch(HISTORY_URL, { cache: "no-store" });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+async function loadRankHistory() {
+  try {
+    const res = await fetch(RANK_HISTORY_URL, { cache: "no-store" });
     if (!res.ok) return [];
     return await res.json();
   } catch {
@@ -412,7 +388,9 @@ function renderPlayerCards(players) {
 
     const d = p;
     const current = highestRank(d.competitive);
-    const best = computePeakRank(latestRawHistory, p.key);
+    const currentAsPoint = current ? { score: current.score, label: rankText(current.entry), roleLabel: current.roleLabel } : null;
+    const confirmedBest = computePeakRank(latestRawHistory, latestRankHistory, p.key);
+    const best = pickBetterRank(confirmedBest, currentAsPoint);
 
     card.innerHTML = `
       <div class="player-card-head">
@@ -490,25 +468,21 @@ function rcX(date) {
   return RC_MARGIN.left + t * RC_PLOT_W;
 }
 
-function buildRankSeries(history, players) {
+function buildRankSeries(history, rankHistory, players) {
   const series = {};
   players.forEach((p) => {
-    series[p.key] = buildPlayerRankPoints(history, p.key, p.ok ? loadRankEvents(p.key) : []);
+    const points = buildPlayerRankPoints(history, rankHistory, p.key);
+    // Append the current live reading so the line always reaches "now,"
+    // even a few minutes ahead of the collector's last poll.
+    if (p.ok) {
+      const current = highestRank(p.competitive);
+      if (current) {
+        points.push({ date: new Date(), score: current.score, label: rankText(current.entry), roleLabel: current.roleLabel });
+      }
+    }
+    series[p.key] = points;
   });
   return series;
-}
-
-// Step-after polyline: holds flat at the old value until the exact moment
-// of the next recorded point, then jumps — matching how rank actually
-// moves (in discrete jumps between matches), rather than implying a
-// gradual climb between two far-apart timestamps.
-function stepPointsAttr(pts, xFn, yFn) {
-  const coords = [];
-  pts.forEach((pt, i) => {
-    coords.push(`${xFn(pt.date)},${yFn(pt.score)}`);
-    if (i < pts.length - 1) coords.push(`${xFn(pts[i + 1].date)},${yFn(pt.score)}`);
-  });
-  return coords.join(" ");
 }
 
 // Zooms the y-axis to one division below the lowest achieved rank through
@@ -527,9 +501,9 @@ function computeRankYDomain(series, players) {
   return { minDiv, maxDiv, yMin: minDiv * TIERS_PER_DIVISION, yMax: (maxDiv + 1) * TIERS_PER_DIVISION };
 }
 
-function renderLineChart(history, players) {
+function renderLineChart(history, rankHistory, players) {
   const container = document.getElementById("line-chart");
-  const series = buildRankSeries(history, players);
+  const series = buildRankSeries(history, rankHistory, players);
   const { minDiv, maxDiv, yMin, yMax } = computeRankYDomain(series, players);
 
   function rcY(score) {
@@ -568,7 +542,7 @@ function renderLineChart(history, players) {
   const lines = players.map((p) => {
     const pts = series[p.key];
     if (pts.length === 0) return "";
-    const pointsAttr = stepPointsAttr(pts, rcX, rcY);
+    const pointsAttr = pts.map((pt) => `${rcX(pt.date)},${rcY(pt.score)}`).join(" ");
     const dots = pts.map((pt) => `<circle class="cw-dot" cx="${rcX(pt.date)}" cy="${rcY(pt.score)}" r="4.5" fill="var(${p.varName})" />`).join("");
     const last = pts[pts.length - 1];
     const endLabel = `
@@ -1202,9 +1176,10 @@ async function refresh() {
   const minSpin = new Promise((resolve) => setTimeout(resolve, 500));
 
   try {
-    const [liveResults, history] = await Promise.all([
+    const [liveResults, history, rankHistory] = await Promise.all([
       Promise.all(PLAYERS.map((p) => loadLivePlayer(p))),
       loadHistory(),
+      loadRankHistory(),
     ]);
 
     const players = PLAYERS.map((p, i) => ({ ...p, ...liveResults[i] }));
@@ -1219,18 +1194,17 @@ async function refresh() {
     // The raw committed history is never touched — it's the anchor Day 0
     // (and every closed day after it) is measured against, for both the
     // games/hero-stats deltas and the rank chart. Today's live reading
-    // travels alongside it, never in place of a committed entry.
+    // travels alongside it, never in place of a committed entry. Rank
+    // changes come from data/rank_history.json, written server-side by the
+    // collector (shared for both players, not per-browser).
     latestRawHistory = history;
     latestLiveEntry = liveEntry;
-
-    // Rank changes get checked (and, if new, permanently recorded to
-    // localStorage) on every refresh, before anything reads them.
-    players.forEach((p) => recordRankEventIfChanged(history, p));
+    latestRankHistory = rankHistory;
 
     renderPlayerCards(players);
     renderLegend(players, "rank-legend");
     renderLegend(players, "games-legend");
-    renderLineChart(history, players);
+    renderLineChart(history, rankHistory, players);
     renderGamesChart(history, players, liveEntry);
     renderStatsTab(players);
     await renderHeroesTab(players);

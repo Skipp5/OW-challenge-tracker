@@ -1,6 +1,12 @@
-// Fetches current OverFast API stats for both players and upserts today's
-// entry (CEST calendar date) into data/history.json. Run daily via GitHub
-// Actions, scheduled for 22:00 UTC = midnight CEST.
+// Fetches current OverFast API stats for both players. Upserts today's
+// entry (CEST calendar date) into data/history.json — one entry per day is
+// enough for every *cumulative* stat (games played, time played, etc.),
+// since delta = end-of-day minus start-of-day is correct no matter how many
+// times a day gets polled. Separately appends to data/rank_history.json,
+// but only when a player's rank actually changed since the last recorded
+// entry — rank isn't cumulative (it can go up and back down within a day),
+// so catching that requires an actual observation at the moment of change,
+// not just a once-daily snapshot. Run on a schedule via GitHub Actions.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +14,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API_BASE = "https://overfast-api.tekrop.fr";
 const HISTORY_PATH = path.join(__dirname, "..", "data", "history.json");
+const RANK_HISTORY_PATH = path.join(__dirname, "..", "data", "rank_history.json");
 
 // The collector is scheduled to run at 22:00 UTC specifically because that's
 // midnight CEST — but 22:00 UTC is still the *previous* UTC calendar date, so
@@ -60,16 +67,21 @@ async function collectPlayer(p) {
   }
 }
 
+async function readJsonSafe(filePath, label) {
+  try {
+    const raw = (await readFile(filePath, "utf8")).replace(/^﻿/, ""); // strip BOM if present
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error(`Could not read/parse existing ${label}, starting fresh: ${err.message}`);
+    return [];
+  }
+}
+
 async function main() {
   await mkdir(path.dirname(HISTORY_PATH), { recursive: true });
 
-  let history = [];
-  try {
-    const raw = (await readFile(HISTORY_PATH, "utf8")).replace(/^﻿/, ""); // strip BOM if present
-    history = JSON.parse(raw);
-  } catch (err) {
-    console.error(`Could not read/parse existing history.json, starting fresh: ${err.message}`);
-  }
+  const history = await readJsonSafe(HISTORY_PATH, "history.json");
+  const rankHistory = await readJsonSafe(RANK_HISTORY_PATH, "rank_history.json");
 
   const today = cestDate(new Date());
   const players = {};
@@ -81,9 +93,24 @@ async function main() {
   const idx = history.findIndex((h) => h.date === today);
   if (idx >= 0) history[idx] = entry; else history.push(entry);
   history.sort((a, b) => a.date.localeCompare(b.date));
-
   await writeFile(HISTORY_PATH, JSON.stringify(history, null, 2) + "\n");
   console.log(`Snapshot for ${today} saved (${history.length} day(s) total).`);
+
+  const lastRank = rankHistory.length > 0 ? rankHistory[rankHistory.length - 1] : null;
+  const currentRanks = {};
+  for (const p of PLAYERS) {
+    currentRanks[p.key] = players[p.key].ok ? players[p.key].competitive : null;
+  }
+  const rankChanged = PLAYERS.some((p) =>
+    JSON.stringify(currentRanks[p.key]) !== JSON.stringify(lastRank ? lastRank.players[p.key] : undefined)
+  );
+  if (rankChanged) {
+    rankHistory.push({ timestamp: new Date().toISOString(), players: currentRanks });
+    await writeFile(RANK_HISTORY_PATH, JSON.stringify(rankHistory, null, 2) + "\n");
+    console.log(`Rank change recorded (${rankHistory.length} event(s) total).`);
+  } else {
+    console.log("No rank change since last recorded event.");
+  }
 }
 
 main().catch((err) => {
