@@ -106,7 +106,19 @@ function buildPlayerRankPoints(history, rankHistory, playerKey) {
     points.push({ date: new Date(ev.timestamp), score: peak.score, label: rankText(peak.entry), roleLabel: peak.roleLabel });
   });
   points.sort((a, b) => a.date - b.date);
-  return points;
+
+  // Collapse same-rank points that fall on the same calendar day (e.g. the
+  // once-daily floor from history.json landing right next to a same-day
+  // rank_history.json event) into one — keep the day's first (opening)
+  // point. A day's own opening point is always kept even if the rank
+  // matches the previous day; only redundant same-day repeats collapse.
+  const deduped = [];
+  points.forEach((pt) => {
+    const last = deduped[deduped.length - 1];
+    if (last && last.score === pt.score && isoDate(last.date) === isoDate(pt.date)) return;
+    deduped.push(pt);
+  });
+  return deduped;
 }
 
 // Scans every tracked snapshot and recorded rank-change event for a player

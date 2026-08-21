@@ -68,6 +68,19 @@ async function collectPlayer(p) {
   }
 }
 
+// Order-independent structural equality — JSON.stringify comparison isn't
+// safe here because OverFast doesn't guarantee stable key ordering between
+// requests, so semantically identical rank data can serialize differently
+// and falsely look like a change.
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => deepEqual(a[key], b[key]));
+}
+
 async function readJsonSafe(filePath, label) {
   try {
     const raw = (await readFile(filePath, "utf8")).replace(/^﻿/, ""); // strip BOM if present
@@ -113,13 +126,15 @@ async function main() {
   for (const p of PLAYERS) {
     currentRanks[p.key] = players[p.key].ok ? players[p.key].competitive : null;
   }
-  const rankChanged = PLAYERS.some((p) =>
-    JSON.stringify(currentRanks[p.key]) !== JSON.stringify(lastRank ? lastRank.players[p.key] : undefined)
-  );
-  if (rankChanged) {
+  const rankChanged = PLAYERS.some((p) => !deepEqual(currentRanks[p.key], lastRank ? lastRank.players[p.key] : undefined));
+  // Also record an entry for the first poll of a new day even if nothing
+  // changed — the chart should always show a day's opening rank, not just
+  // the days something happened to move.
+  const isNewDay = !lastRank || cestDate(new Date(lastRank.timestamp)) !== today;
+  if (rankChanged || isNewDay) {
     rankHistory.push({ timestamp: new Date().toISOString(), players: currentRanks });
     await writeFile(RANK_HISTORY_PATH, JSON.stringify(rankHistory, null, 2) + "\n");
-    console.log(`Rank change recorded (${rankHistory.length} event(s) total).`);
+    console.log(`Rank event recorded (${rankHistory.length} event(s) total).`);
   } else {
     console.log("No rank change since last recorded event.");
   }
