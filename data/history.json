@@ -4745,7 +4745,7 @@
   },
   {
     "date": "2026-08-21",
-    "collected_at": "2026-08-21T07:27:39.212Z",
+    "collected_at": "2026-08-21T08:18:09.171Z",
     "opening_players": {
       "skipp": {
         "battletag": "Skipp#2133",
@@ -6056,12 +6056,12 @@
               "of_match_on_fire": 16
             },
             "game": {
+              "game_tied": 1,
               "time_played": 46102,
               "games_played": 65,
               "games_won": 37,
               "games_lost": 27,
-              "hero_wins": 37,
-              "game_tied": 1
+              "hero_wins": 37
             },
             "match_awards": {
               "cards": 25
@@ -6160,10 +6160,10 @@
               "time_played": 19604,
               "games_played": 27,
               "games_won": 17,
+              "games_tied": 0,
               "knockback_kills": 41,
               "knockback_kills_most_in_game": 4,
               "hero_wins": 17,
-              "games_tied": 0,
               "win_percentage": 63,
               "games_lost": 10,
               "knockback_kills_avg_per_10_min": 1.25
@@ -6306,8 +6306,8 @@
               "time_played": 17831,
               "games_played": 25,
               "games_won": 15,
-              "hero_wins": 15,
               "games_tied": 1,
+              "hero_wins": 15,
               "win_percentage": 63,
               "games_lost": 9
             },
