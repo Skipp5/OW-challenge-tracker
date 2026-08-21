@@ -484,11 +484,13 @@ function buildRankSeries(history, rankHistory, players) {
   const series = {};
   players.forEach((p) => {
     const points = buildPlayerRankPoints(history, rankHistory, p.key);
-    // Append the current live reading so the line always reaches "now,"
-    // even a few minutes ahead of the collector's last poll.
+    // Only extend the line with the live reading if it's an actual change
+    // from the last known point — otherwise every refresh would add a
+    // redundant dot at the same rank, cluttering the graph for no reason.
     if (p.ok) {
       const current = highestRank(p.competitive);
-      if (current) {
+      const last = points.length > 0 ? points[points.length - 1] : null;
+      if (current && (!last || current.score !== last.score)) {
         points.push({ date: new Date(), score: current.score, label: rankText(current.entry), roleLabel: current.roleLabel });
       }
     }
