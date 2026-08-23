@@ -227,5 +227,24 @@
         "season": 24
       }
     }
+  },
+  {
+    "timestamp": "2026-08-23T01:16:55.121Z",
+    "players": {
+      "skipp": {
+        "season": 24,
+        "tank": null,
+        "damage": {
+          "division": "platinum",
+          "tier": 5,
+          "role_icon": "https://static.playoverwatch.com/images/pages/career/icons/role/offense.0f3b26f08388747909719cb6f8940d0b4683039e.svg#icon",
+          "rank_icon": "https://static.playoverwatch.com/images/pages/career/icons/rank/Rank_PlatinumTier.694340e3a5b2031d4fac9eb1d8f52c6855d4c072.png",
+          "tier_icon": "https://static.playoverwatch.com/images/pages/career/icons/rank/TierDivision_5.b1cc1770c12501c536e18127c83169f65e3e5de0.png"
+        },
+        "support": null,
+        "open": null
+      },
+      "looloobaa": null
+    }
   }
 ]
