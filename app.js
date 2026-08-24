@@ -659,8 +659,10 @@ function renderGamesChart(history, players, liveEntry) {
     return;
   }
 
-  const maxGames = Math.max(1, ...players.flatMap((p) => perPlayer[p.key].map((d) => d.games)));
-  const yMax = niceMax(maxGames);
+  // Use the exact max rather than niceMax's rounded-up value — niceMax's
+  // padding (e.g. rounding 21 up to 50) left so much headroom the bars
+  // were hard to read.
+  const yMax = Math.max(1, ...players.flatMap((p) => perPlayer[p.key].map((d) => d.games)));
   const dayW = GC_PLOT_W / dates.length;
   const barW = Math.min(24, dayW * 0.32);
   const groupGap = 3;
