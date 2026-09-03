@@ -48444,7 +48444,7 @@
   },
   {
     "date": "2026-09-03",
-    "collected_at": "2026-09-03T18:02:11.190Z",
+    "collected_at": "2026-09-03T21:06:14.114Z",
     "opening_players": {
       "skipp": {
         "battletag": "Skipp#2133",
@@ -50601,11 +50601,11 @@
               "satsuriku_spree_kills_most_in_game": 9,
               "joyride_damage_done_most_in_game": 2579,
               "joyride_air_launch_accuracy": 40,
-              "joyride_ground_launch_accuracy": 49,
               "execution_accuracy": 31,
+              "joyride_ground_launch_accuracy": 49,
               "joyride_kills_avg_per_10_min": 3.61,
-              "satsuriku_spree_kills_avg_per_10_min": 3.08,
               "joyride_damage_done_avg_per_10_min": 1044,
+              "satsuriku_spree_kills_avg_per_10_min": 3.08,
               "execution_kills_avg_per_10_min": 7.72
             },
             "match_awards": {
@@ -50678,8 +50678,8 @@
               "tracking_kills": 3,
               "trailblazer_kills": 2,
               "trailblazer_kills_most_in_game": 2,
-              "trailblazer_kills_avg_per_10_min": 1.16,
               "tracking_kills_avg_per_10_min": 1.74,
+              "trailblazer_kills_avg_per_10_min": 1.16,
               "tracking_shot_accuracy": 36
             }
           },
@@ -50752,8 +50752,8 @@
               "tactical_visor_kills_most_in_game": 1,
               "self_healing": 441,
               "self_healing_most_in_game": 441,
-              "helix_rocket_kills_avg_per_10_min": 4.17,
               "tactical_visor_kills_avg_per_10_min": 2.08,
+              "helix_rocket_kills_avg_per_10_min": 4.17,
               "helix_rocket_accuracy": 60,
               "self_healing_avg_per_10_min": 919
             }
@@ -50836,8 +50836,8 @@
               "self_healing_most_in_game": 2001,
               "low_health_recalls": 45,
               "low_health_recalls_most_in_game": 45,
-              "pulse_bomb_attach_rate": 43,
               "low_health_recalls_avg_per_10_min": 3.75,
+              "pulse_bomb_attach_rate": 43,
               "pulse_bomb_kills_avg_per_10_min": 2.67,
               "pulse_bombs_attached_avg_per_10_min": 1.75,
               "self_healing_avg_per_10_min": 1131
