@@ -103,18 +103,39 @@ async function main() {
     players[p.key] = await collectPlayer(p);
   }
 
-  // opening_players is frozen at the first poll of the day and never
-  // touched again — it's the anchor "how many games did today add" is
-  // measured against. players is updated on every poll and reflects
-  // wherever the day currently stands (or, once the day is over, its
-  // final value). Without keeping both, a day polled every 20 minutes
-  // would only ever show "value as of the last poll," with no way to
-  // recover what it started at.
+  // opening_players is frozen at the first *successful* poll of the day and
+  // never touched again — it's the anchor "how many games did today add" is
+  // measured against. players reflects the latest successful poll (or,
+  // once the day is over, its final value). A failed fetch (OverFast
+  // 5xx/timeout — this happens) must never overwrite either field with
+  // failure data; that would permanently corrupt the day. Instead it's
+  // simply skipped, keeping whatever was last known-good, and a later
+  // successful poll fills in an opening value that was missing.
   const idx = history.findIndex((h) => h.date === today);
   if (idx >= 0) {
-    history[idx].collected_at = new Date().toISOString();
-    history[idx].players = players;
+    const existing = history[idx];
+    const nextPlayers = { ...existing.players };
+    const nextOpening = { ...(existing.opening_players || {}) };
+    for (const p of PLAYERS) {
+      if (!players[p.key].ok) continue; // keep last known-good, don't clobber
+      nextPlayers[p.key] = players[p.key];
+      if (!nextOpening[p.key]?.ok) nextOpening[p.key] = players[p.key];
+    }
+    existing.collected_at = new Date().toISOString();
+    existing.players = nextPlayers;
+    existing.opening_players = nextOpening;
   } else {
+    // Starting a new day: whatever happened between the previous day's
+    // last poll and this exact instant (the CEST midnight boundary) would
+    // otherwise be invisible — neither day's delta would ever count it.
+    // Back-fill the previous day's closing value with this same successful
+    // reading, since nothing else could have changed in that gap.
+    const prevEntry = history.length > 0 ? history[history.length - 1] : null;
+    if (prevEntry) {
+      for (const p of PLAYERS) {
+        if (players[p.key].ok) prevEntry.players[p.key] = players[p.key];
+      }
+    }
     history.push({ date: today, collected_at: new Date().toISOString(), opening_players: players, players });
   }
   history.sort((a, b) => a.date.localeCompare(b.date));
@@ -124,7 +145,9 @@ async function main() {
   const lastRank = rankHistory.length > 0 ? rankHistory[rankHistory.length - 1] : null;
   const currentRanks = {};
   for (const p of PLAYERS) {
-    currentRanks[p.key] = players[p.key].ok ? players[p.key].competitive : null;
+    // A failed fetch is not "unranked" — that would read as a real change
+    // (and get recorded as one). Carry the last known rank forward instead.
+    currentRanks[p.key] = players[p.key].ok ? players[p.key].competitive : (lastRank ? lastRank.players[p.key] : null);
   }
   const rankChanged = PLAYERS.some((p) => !deepEqual(currentRanks[p.key], lastRank ? lastRank.players[p.key] : undefined));
   // Also record an entry for the first poll of a new day even if nothing
