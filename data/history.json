@@ -143251,5 +143251,37 @@
         }
       }
     }
+  },
+  {
+    "date": "2026-09-29",
+    "collected_at": "2026-09-28T22:23:51.378Z",
+    "opening_players": {
+      "skipp": {
+        "battletag": "Skipp#2133",
+        "ok": false,
+        "reason": "error",
+        "message": "HTTP 504"
+      },
+      "looloobaa": {
+        "battletag": "Looloobaa#2250",
+        "ok": false,
+        "reason": "error",
+        "message": "HTTP 504"
+      }
+    },
+    "players": {
+      "skipp": {
+        "battletag": "Skipp#2133",
+        "ok": false,
+        "reason": "error",
+        "message": "HTTP 504"
+      },
+      "looloobaa": {
+        "battletag": "Looloobaa#2250",
+        "ok": false,
+        "reason": "error",
+        "message": "HTTP 504"
+      }
+    }
   }
 ]
